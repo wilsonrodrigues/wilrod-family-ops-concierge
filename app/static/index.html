@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Family Ops Concierge - Shared Calendar, Lists & AI Planner</title>
+  <meta name="description" content="Configure your family members, consult the shared calendar with automatic sports/music buffers, manage Need-To-Do errands and Want-To-Do wishes, and plan together with AI." />
+  <link rel="manifest" href="/static/manifest.json" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="top-header">
+      <div class="brand-group">
+        <div class="brand-mark" aria-hidden="true">🏡</div>
+        <div class="brand-titles">
+          <div class="title-row">
+            <h1 id="household-title">Family Ops Concierge</h1>
+            <button type="button" class="gear-btn" id="btn-open-setup" title="Family Setup" aria-label="Family Setup">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+              </svg>
+            </button>
+          </div>
+          <p class="brand-subtitle" id="household-rules-summary">Shared Calendar, To-Do & Wish List</p>
+        </div>
+      </div>
+
+      <div class="switcher-wrap" aria-label="Active family member">
+        <span class="switcher-label">Who's here:</span>
+        <div class="member-pills" id="active-member-pills"></div>
+      </div>
+    </header>
+
+    <nav class="primary-nav" aria-label="Main navigation">
+      <button type="button" class="nav-tab active" id="tab-btn-concierge" data-target="view-concierge">AI Concierge</button>
+      <button type="button" class="nav-tab" id="tab-btn-calendar" data-target="view-calendar">Calendar</button>
+      <button type="button" class="nav-tab" id="tab-btn-lists" data-target="view-lists">To-Do & Wishes</button>
+    </nav>
+
+    <main>
+      <!-- VIEW 1: SHARED CALENDAR -->
+      <section class="view-panel" id="view-calendar">
+        <div class="surface-card">
+          <div class="section-header">
+            <div>
+              <h2>Add Event to Shared Calendar</h2>
+              <p class="section-desc">Titles automatically add <code>[Participant]</code> or <code>[All]</code>, and sports/music add your arrival buffer.</p>
+            </div>
+          </div>
+
+          <div class="feedback-banner" id="event-feedback"></div>
+
+          <form id="add-event-form" class="form-grid">
+            <div class="field-group">
+              <label for="evt-title">Event title</label>
+              <input type="text" id="evt-title" required minlength="2" placeholder="e.g. Sam's Birthday Party" />
+            </div>
+            <div class="field-group">
+              <label for="evt-category">Category</label>
+              <select id="evt-category">
+                <option value="other">General / Other</option>
+                <option value="school_exam">School Exam</option>
+                <option value="sports">Sports Match / Practice (+Buffer)</option>
+                <option value="music">Music Rehearsal / Audition (+Buffer)</option>
+                <option value="birthday_party">Birthday Party</option>
+                <option value="family_outing">Family Outing / Cinema</option>
+                <option value="errand">Scheduled Errand</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="evt-start">Start</label>
+              <input type="datetime-local" id="evt-start" required />
+            </div>
+            <div class="field-group">
+              <label for="evt-end">End</label>
+              <input type="datetime-local" id="evt-end" required />
+            </div>
+            <div class="field-group">
+              <label for="evt-recurrence">Repeat</label>
+              <select id="evt-recurrence">
+                <option value="NONE">Does not repeat (1x)</option>
+                <option value="WEEKLY">Weekly - 30 repetitions (e.g. every Tuesday)</option>
+                <option value="BIWEEKLY">Every 2 weeks - 30 repetitions</option>
+                <option value="DAILY">Daily - 30 repetitions</option>
+                <option value="MONTHLY">Monthly - 30 repetitions</option>
+              </select>
+            </div>
+            <div class="field-group full-width">
+              <label>Who's participating? (sets <code>[Name]</code> or <code>[All]</code> prefix)</label>
+              <div class="filter-bar" id="evt-participants-chips" style="margin-bottom: 0;"></div>
+            </div>
+            <div class="field-group">
+              <label for="evt-location">Location (leave blank if unknown)</label>
+              <input type="text" id="evt-location" placeholder="e.g. Community Sports Park (optional)" />
+            </div>
+            <div class="field-group">
+              <label for="evt-notes">Notes (optional)</label>
+              <input type="text" id="evt-notes" placeholder="Uniform, gift reminder..." />
+            </div>
+            <div class="field-group full-width">
+              <button type="submit" class="btn btn-primary" id="btn-submit-event">Add to Shared Calendar</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="surface-card">
+          <div class="section-header">
+            <div>
+              <h2>Upcoming Family Schedule</h2>
+              <p class="section-desc">Filter by family member or switch between the next 14 days and all scheduled repetitions.</p>
+            </div>
+            <div class="filter-bar" id="calendar-horizon-filters" style="margin-bottom: 0;"></div>
+          </div>
+          <div class="filter-bar" id="calendar-member-filters"></div>
+          <div id="calendar-events-container"></div>
+        </div>
+      </section>
+
+      <!-- VIEW 2: SHARED TO-DO & WISH LISTS -->
+      <section class="view-panel" id="view-lists">
+        <div class="surface-card">
+          <div class="section-header">
+            <div>
+              <h2>Add Errand or Family Wish</h2>
+              <p class="section-desc">Anyone in the family can add obligations (Need-To-Do) or fun ideas before they close (Want-To-Do).</p>
+            </div>
+          </div>
+
+          <div class="feedback-banner" id="item-feedback"></div>
+
+          <form id="add-item-form" class="form-grid">
+            <div class="field-group">
+              <label for="item-title">What do we need or want to do?</label>
+              <input type="text" id="item-title" required minlength="3" placeholder="e.g. Buy birthday gift, Watch movie before leaving cinemas" />
+            </div>
+            <div class="field-group">
+              <label for="item-type">List type</label>
+              <select id="item-type">
+                <option value="NEED_TO_DO">Need-To-Do (Errand / Obligation)</option>
+                <option value="WANT_TO_DO">Want-To-Do (Family Wish / Outing)</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="item-deadline">Due or closing date (optional)</label>
+              <input type="date" id="item-deadline" />
+            </div>
+            <div class="field-group">
+              <label for="item-assigned">Owner / Assigned to</label>
+              <select id="item-assigned"></select>
+            </div>
+            <div class="field-group full-width">
+              <button type="submit" class="btn btn-primary" id="btn-submit-item">Save to Shared List</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="lists-columns">
+          <div class="surface-card">
+            <div class="section-header">
+              <div>
+                <h2>Need-To-Do Errands</h2>
+                <p class="section-desc">Deadlines, school prep, gifts, and logistics.</p>
+              </div>
+            </div>
+            <div id="need-todo-list"></div>
+          </div>
+
+          <div class="surface-card">
+            <div class="section-header">
+              <div>
+                <h2>Want-To-Do Wish List</h2>
+                <p class="section-desc">Movies, exhibitions, restaurants, and weekend ideas.</p>
+              </div>
+            </div>
+            <div id="want-todo-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 3: AI CONCIERGE (Default Main Screen) -->
+      <section class="view-panel active" id="view-concierge">
+        <div class="concierge-layout">
+          <aside class="surface-card chat-history-rail" aria-label="Chat session history">
+            <div class="chat-rail-header">
+              <h2>Chat History</h2>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-new-chat" title="Start a new parallel conversation">+ New Chat</button>
+            </div>
+            <div class="chat-sessions-list" id="chat-sessions-list"></div>
+          </aside>
+
+          <div class="surface-card chat-box" id="chat-dropzone">
+            <div class="section-header">
+              <div>
+                <h2 id="active-chat-title">Family Ops AI Concierge</h2>
+                <p class="section-desc" id="chat-speaker-indicator">Speak, upload or paste an invitation photo, or type below.</p>
+              </div>
+              <button type="button" class="btn btn-ghost-danger" id="btn-stop-request" style="display: none;" title="Stop ongoing request in this chat">⏹ Stop</button>
+            </div>
+
+            <div class="feedback-banner" id="chat-feedback"></div>
+
+            <div class="prompt-starters">
+              <button type="button" class="starter-chip" data-prompt="What events, errands, and wishes do we have scheduled right now? Suggest how to organize our weekend.">Organize our weekend</button>
+              <button type="button" class="starter-chip" data-prompt="Which Want-To-Do wish-list items are open, and which free window on our calendar fits them best?">Fit a Wish-List outing</button>
+              <button type="button" class="starter-chip" data-prompt="Check our household profile, upcoming calendar conflicts, and open Need-To-Do errands.">Check conflicts & errands</button>
+            </div>
+
+            <div class="chat-messages" id="chat-messages">
+              <div class="msg-bubble assistant">Hi! I'm your Family Ops Concierge. You can type below, speak with your microphone (🎤 Speak), or upload/paste a photo of a party invitation or school flyer (📷 Invite / Image) so we can organize your family schedule together!</div>
+            </div>
+
+            <div class="chat-attachment-strip" id="chat-attachment-strip"></div>
+
+            <form class="chat-composer" id="chat-form">
+              <input type="file" id="chat-file-input" accept="image/*,audio/*,application/pdf" multiple hidden />
+              <button type="button" class="btn btn-secondary" id="btn-attach-media" title="Upload invitation image, PDF flyer, or audio clip">📷 Invite / Image</button>
+              <button type="button" class="btn btn-secondary" id="btn-mic-record" title="Record a voice message to the Concierge">🎤 Speak</button>
+              <input type="text" id="chat-input" placeholder="Type, paste an image (Ctrl+V), or attach/record above..." autocomplete="off" />
+              <button type="submit" class="btn btn-primary" id="btn-send-chat">Send</button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 4: FAMILY SETUP SCREEN -->
+      <section class="view-panel" id="view-setup">
+        <div class="surface-card">
+          <div class="section-header">
+            <div>
+              <h2>Configure Your Family Household</h2>
+              <p class="section-desc">Set up your household name, scheduling rules, optional shared passcode, and every family member so everyone can use the app.</p>
+            </div>
+            <button type="button" class="btn btn-secondary" id="btn-close-setup">Back to AI Concierge</button>
+          </div>
+
+          <div class="feedback-banner" id="setup-feedback"></div>
+
+          <form id="household-setup-form">
+            <div class="form-grid" style="margin-bottom: 20px;">
+              <div class="field-group">
+                <label for="cfg-name">Household Name</label>
+                <input type="text" id="cfg-name" required placeholder="e.g. Foobar Family" />
+              </div>
+              <div class="field-group">
+                <label for="cfg-language">Default Language</label>
+                <select id="cfg-language">
+                  <option value="en" selected>English</option>
+                  <option value="pt-BR">Português (Brasil)</option>
+                </select>
+              </div>
+              <div class="field-group">
+                <label for="cfg-timezone">Timezone</label>
+                <input type="text" id="cfg-timezone" value="America/Sao_Paulo" />
+              </div>
+              <div class="field-group">
+                <label for="cfg-buffer">Sports & Music Arrival Buffer (min)</label>
+                <input type="number" id="cfg-buffer" min="0" max="120" value="30" />
+              </div>
+              <div class="field-group">
+                <label for="cfg-passcode">Shared Family Passcode (optional)</label>
+                <input type="password" id="cfg-passcode" placeholder="Leave blank to keep current" />
+              </div>
+            </div>
+
+            <div class="section-header">
+              <div>
+                <h2>Family Members</h2>
+                <p class="section-desc">Each member gets a quick-switch button at the top of the screen and personalized AI context.</p>
+              </div>
+              <button type="button" class="btn btn-secondary" id="btn-add-member-row">+ Add Family Member</button>
+            </div>
+
+            <div id="setup-members-list"></div>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px;">
+              <button type="submit" class="btn btn-primary" id="btn-save-setup">Save Family Configuration</button>
+              <button type="button" class="btn btn-secondary" id="btn-clear-passcode">Remove Passcode Lock</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Household Passcode Unlock Modal -->
+  <div class="modal-backdrop" id="passcode-modal" role="dialog" aria-modal="true" aria-labelledby="passcode-modal-title">
+    <div class="modal-card">
+      <h2 id="passcode-modal-title" style="margin-top: 0;">Enter Family Passcode</h2>
+      <p class="section-desc" style="margin-bottom: 14px;">Enter your shared household passcode once on this device to unlock the calendar and lists.</p>
+      <div class="feedback-banner error" id="passcode-error">Incorrect passcode. Please try again.</div>
+      <form id="passcode-unlock-form" class="field-group">
+        <input type="password" id="unlock-passcode-input" placeholder="Family passcode" required />
+        <button type="submit" class="btn btn-primary" style="margin-top: 8px;">Unlock Household</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

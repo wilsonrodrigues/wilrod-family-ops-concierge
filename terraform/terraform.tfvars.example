@@ -1,0 +1,7 @@
+project_id            = "your-gcp-project-id"
+region                = "us-central1"
+service_name          = "family-ops-concierge"
+container_image       = "us-central1-docker.pkg.dev/your-gcp-project-id/family-ops-agents/family-ops-concierge:latest"
+gemini_secret_id      = "family-ops-gemini-api-key"
+enable_cloud_dlp      = true
+allow_unauthenticated = true

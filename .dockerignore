@@ -1,0 +1,14 @@
+.venv/
+.git/
+.env
+*.env
+!.env.example
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.jsonl
+__pycache__/
+.pytest_cache/
+.terraform/
+*.tfstate*
