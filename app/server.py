@@ -83,7 +83,7 @@ def _get_session_lock(session_id: str) -> asyncio.Lock:
 app = FastAPI(
     title="Family Ops Concierge",
     description="Shared Family Calendar, Multimodal Voice & Invitation Intake, Errands, Wishes, and ADK Concierge.",
-    version="0.7.0",
+    version="0.8.0",
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -111,13 +111,12 @@ class MemberSetupItem(BaseModel):
     avatar: str = Field(default="🙂")
     color: str = Field(default="#1b6b5a")
     email: str = Field(default="")
-    routine_notes: str = Field(default="")
 
 
 class HouseholdSetupPayload(BaseModel):
     household_name: str = Field(..., min_length=2, max_length=80)
     timezone: str = Field(default="America/Sao_Paulo")
-    preferred_language: str = Field(default="en")
+    preferred_language: str = Field(default="pt-BR")
     sports_music_buffer_min: int = Field(default=30, ge=0, le=120)
     new_passcode: Optional[str] = Field(default=None)
     clear_passcode: bool = Field(default=False)
@@ -568,7 +567,7 @@ def _describe_pending_confirmation(fc: types.FunctionCall) -> dict[str, Any]:
     tool_name = str(orig.get("name") or "calendar_action")
     tool_args = orig.get("args") if isinstance(orig.get("args"), dict) else {}
 
-    summary = f"Confirm tool '{tool_name}'"
+    summary = f"Confirmar ação '{tool_name}'"
     warnings: list[str] = []
     if tool_name == "delete_family_calendar_event":
         event_id = str(tool_args.get("event_id") or "")
@@ -580,16 +579,15 @@ def _describe_pending_confirmation(fc: types.FunctionCall) -> dict[str, Any]:
             None,
         )
         if matched:
-            scope = "entire recurring series" if delete_series and matched.get("series_id") else "single occurrence"
-            summary = f"Delete '{matched['title']}' on {matched['start_iso'][:16].replace('T', ' ')} ({scope})"
+            scope = "toda a série recorrente" if delete_series and matched.get("series_id") else "apenas esta ocorrência"
+            summary = f"Remover '{matched['title']}' em {matched['start_iso'][:16].replace('T', ' ')} ({scope})"
         else:
-            scope = "recurring series" if delete_series else "single occurrence"
-            summary = f"Delete calendar event {event_id} ({scope})"
+            scope = "série recorrente" if delete_series else "ocorrência única"
+            summary = f"Remover evento {event_id} ({scope})"
     elif tool_name == "schedule_family_calendar_event":
-        raw_title = str(tool_args.get("title") or "Event")
+        raw_title = str(tool_args.get("title") or "Evento")
         participants = str(tool_args.get("participants") or "All")
         _, formatted_title = normalize_participants_and_title(raw_title, participants)
-        category = str(tool_args.get("category") or "other")
         recurrence = str(tool_args.get("recurrence") or "NONE")
         occurrences = int(
             tool_args.get("occurrences")
@@ -599,18 +597,19 @@ def _describe_pending_confirmation(fc: types.FunctionCall) -> dict[str, Any]:
         end_iso_raw = str(tool_args.get("end_iso") or "")
         start_display = start_iso_raw[:16].replace("T", " ")
         scope_label = (
-            "one-time event"
+            "evento único"
             if recurrence == "NONE"
-            else f"{recurrence} x {occurrences} occurrences"
+            else f"{recurrence} x {occurrences} repetições"
         )
         warnings = find_calendar_overlaps(
             start_iso=start_iso_raw,
             end_iso=end_iso_raw,
-            category=category,
+            participants=participants,
+            title=formatted_title,
             recurrence=recurrence,
             occurrences=occurrences,
         )
-        summary = f"Schedule '{formatted_title}' starting {start_display} ({scope_label})"
+        summary = f"Agendar '{formatted_title}' em {start_display} ({scope_label})"
 
     return {
         "confirmation_call_id": fc.id,
@@ -684,11 +683,11 @@ async def _execute_runner_turn(
         if not reply_text:
             if pending_confirmations:
                 reply_text = (
-                    "Human-in-the-Loop confirmation required before modifying the shared Family Calendar. "
-                    "Please review the action below and click Approve or Cancel."
+                    "Confirmação necessária antes de atualizar a Agenda da Família. "
+                    "Revise os detalhes abaixo e toque em Aprovar ou Cancelar."
                 )
             else:
-                reply_text = "Done!"
+                reply_text = "Feito!"
 
         root_span.set_attribute("concierge.tools_called_count", len(tool_calls_made))
         root_span.set_attribute("concierge.pending_confirmations_count", len(pending_confirmations))
@@ -731,13 +730,13 @@ async def _execute_runner_turn(
 async def chat_with_concierge(payload: ChatRequestPayload) -> dict[str, Any]:
     raw_user_text = payload.message.strip()
     if not raw_user_text and not payload.attachments:
-        raise HTTPException(status_code=400, detail="Provide a message, voice recording, or image attachment.")
+        raise HTTPException(status_code=400, detail="Envie uma mensagem, áudio ou imagem.")
 
     media_parts = _decode_media_parts(payload.attachments)
 
     bundle = store.get_household_bundle()
     tz_name = bundle["household"].get("timezone") or "America/Sao_Paulo"
-    preferred_lang = bundle["household"].get("preferred_language") or "en"
+    preferred_lang = bundle["household"].get("preferred_language") or "pt-BR"
     try:
         now_local = datetime.now(ZoneInfo(tz_name))
     except ZoneInfoNotFoundError:
@@ -745,7 +744,7 @@ async def chat_with_concierge(payload: ChatRequestPayload) -> dict[str, Any]:
 
     has_audio = any(a.mime_type.lower().startswith("audio/") for a in payload.attachments)
     display_user_text = raw_user_text or (
-        "Sent a voice message" if has_audio else "Attached an invitation/image"
+        "Enviou uma mensagem de voz" if has_audio else "Enviou uma imagem/convite"
     )
     user_text = raw_user_text
     if not user_text:
@@ -837,7 +836,7 @@ async def chat_with_concierge(payload: ChatRequestPayload) -> dict[str, Any]:
 @app.post("/api/chat/confirm", dependencies=[Depends(require_household_auth)])
 async def confirm_concierge_tool(payload: ChatConfirmationPayload) -> dict[str, Any]:
     """Resumes a paused ADK Human-in-the-Loop tool call with the user's Approve or Cancel decision."""
-    decision_label = f"{'✓ Approved' if payload.confirmed else '✕ Cancelled'} by {payload.member_name}"
+    decision_label = f"{'✓ Aprovado' if payload.confirmed else '✕ Cancelado'} por {payload.member_name}"
     store.resolve_message_confirmation(
         payload.session_id,
         payload.confirmation_call_id,

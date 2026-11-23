@@ -646,6 +646,7 @@ def test_clean_new_user_bootstrap_and_past_date_filtering(
     bundle = store.get_household_bundle()
     assert bundle["household"]["is_configured"] is False
     assert bundle["household"]["household_name"] == ""
+    assert bundle["household"]["preferred_language"] == "pt-BR"
     assert bundle["members"] == []
     assert store.query_events() == []
     assert store.query_action_items(include_completed=True) == []

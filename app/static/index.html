@@ -1,15 +1,15 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Family Ops Concierge - Shared Calendar, Lists & AI Planner</title>
-  <meta name="description" content="Configure your family members, consult the shared calendar with automatic sports/music buffers, manage Need-To-Do errands and Want-To-Do wishes, and plan together with AI." />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Family Ops Concierge - Agenda, Listas e Concierge IA</title>
+  <meta name="description" content="Organize a agenda compartilhada da família, tarefas pendentes, lista de desejos e converse com o Concierge IA por texto, voz ou foto." />
   <link rel="manifest" href="/static/manifest.json" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=0.8.0" />
 </head>
 <body>
   <div class="app-shell">
@@ -19,27 +19,27 @@
         <div class="brand-titles">
           <div class="title-row">
             <h1 id="household-title">Family Ops Concierge</h1>
-            <button type="button" class="gear-btn" id="btn-open-setup" title="Family Setup" aria-label="Family Setup">
+            <button type="button" class="gear-btn" id="btn-open-setup" title="Configurações da Família" aria-label="Configurações da Família">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <circle cx="12" cy="12" r="3"></circle>
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
               </svg>
             </button>
           </div>
-          <p class="brand-subtitle" id="household-rules-summary">Shared Calendar, To-Do & Wish List</p>
+          <p class="brand-subtitle" id="household-rules-summary">Agenda, Tarefas e Lista de Desejos</p>
         </div>
       </div>
 
-      <div class="switcher-wrap" id="active-member-switcher" aria-label="Active family member">
-        <span class="switcher-label">Who's here:</span>
+      <div class="switcher-wrap" id="active-member-switcher" aria-label="Membro ativo da família">
+        <span class="switcher-label">Quem está aqui:</span>
         <div class="member-pills" id="active-member-pills"></div>
       </div>
     </header>
 
-    <nav class="primary-nav" id="primary-nav" aria-label="Main navigation">
-      <button type="button" class="nav-tab active" id="tab-btn-concierge" data-target="view-concierge">AI Concierge</button>
-      <button type="button" class="nav-tab" id="tab-btn-calendar" data-target="view-calendar">Calendar</button>
-      <button type="button" class="nav-tab" id="tab-btn-lists" data-target="view-lists">To-Do & Wishes</button>
+    <nav class="primary-nav" id="primary-nav" aria-label="Navegação principal">
+      <button type="button" class="nav-tab active" id="tab-btn-concierge" data-target="view-concierge">Concierge IA</button>
+      <button type="button" class="nav-tab" id="tab-btn-calendar" data-target="view-calendar">Agenda</button>
+      <button type="button" class="nav-tab" id="tab-btn-lists" data-target="view-lists">Tarefas e Desejos</button>
     </nav>
 
     <main>
@@ -48,57 +48,57 @@
         <div class="surface-card">
           <div class="section-header">
             <div>
-              <h2>Upcoming Family Schedule</h2>
-              <p class="section-desc">Upcoming events from today onwards. Click <strong>+</strong> to add an event.</p>
+              <h2>Próximos Compromissos da Família</h2>
+              <p class="section-desc">Eventos a partir de hoje. Toque em <strong>+</strong> para adicionar.</p>
             </div>
             <div class="header-actions-group">
               <div class="filter-bar" id="calendar-horizon-filters" style="margin-bottom: 0;"></div>
-              <button type="button" class="btn-plus-icon" id="btn-toggle-event-form" title="Add event to shared calendar" aria-label="Add event to shared calendar" aria-expanded="false">+</button>
+              <button type="button" class="btn-plus-icon" id="btn-toggle-event-form" title="Adicionar evento à agenda" aria-label="Adicionar evento à agenda" aria-expanded="false">+</button>
             </div>
           </div>
 
           <div class="feedback-banner" id="event-feedback"></div>
 
           <div class="collapsible-drawer" id="event-form-drawer">
-            <h3 class="drawer-title">Add Event to Shared Calendar</h3>
+            <h3 class="drawer-title">Novo Compromisso na Agenda</h3>
             <form id="add-event-form" class="form-grid">
               <div class="field-group full-width">
-                <label for="evt-title">Event title</label>
-                <input type="text" id="evt-title" required minlength="2" placeholder="e.g. Sam's Birthday Party or Soccer Practice" />
+                <label for="evt-title">Título do evento</label>
+                <input type="text" id="evt-title" required minlength="2" placeholder="ex.: Aniversário do Pedro ou Treino de futebol" />
               </div>
               <div class="field-group">
-                <label for="evt-start">Start</label>
+                <label for="evt-start">Início</label>
                 <input type="datetime-local" id="evt-start" required />
               </div>
               <div class="field-group">
-                <label for="evt-end">End</label>
+                <label for="evt-end">Término</label>
                 <input type="datetime-local" id="evt-end" required />
               </div>
               <div class="field-group">
-                <label for="evt-recurrence">Repeat</label>
+                <label for="evt-recurrence">Repetição</label>
                 <select id="evt-recurrence">
-                  <option value="NONE">Does not repeat (1x)</option>
-                  <option value="WEEKLY">Weekly - 30 repetitions</option>
-                  <option value="BIWEEKLY">Every 2 weeks - 30 repetitions</option>
-                  <option value="DAILY">Daily - 30 repetitions</option>
-                  <option value="MONTHLY">Monthly - 30 repetitions</option>
+                  <option value="NONE">Não se repete (1x)</option>
+                  <option value="WEEKLY">Semanal - 30 repetições</option>
+                  <option value="BIWEEKLY">Quinzenal - 30 repetições</option>
+                  <option value="DAILY">Diário - 30 repetições</option>
+                  <option value="MONTHLY">Mensal - 30 repetições</option>
                 </select>
               </div>
               <div class="field-group full-width">
-                <label>Who's participating? (sets <code>[Name]</code> or <code>[All]</code> prefix)</label>
+                <label>Quem vai participar? (define o prefixo <code>[Nome]</code> ou <code>[All]</code>)</label>
                 <div class="filter-bar" id="evt-participants-chips" style="margin-bottom: 0;"></div>
               </div>
               <div class="field-group">
-                <label for="evt-location">Location (leave blank if unknown)</label>
-                <input type="text" id="evt-location" placeholder="e.g. Community Sports Park (optional)" />
+                <label for="evt-location">Local (deixe em branco se não souber)</label>
+                <input type="text" id="evt-location" placeholder="ex.: Clube Pinheiros (opcional)" />
               </div>
               <div class="field-group">
-                <label for="evt-notes">Notes (optional)</label>
-                <input type="text" id="evt-notes" placeholder="Uniform, gift reminder..." />
+                <label for="evt-notes">Observações (opcional)</label>
+                <input type="text" id="evt-notes" placeholder="Uniforme, lembrete de presente..." />
               </div>
               <div class="field-group full-width drawer-actions">
-                <button type="submit" class="btn btn-primary" id="btn-submit-event">Add to Calendar</button>
-                <button type="button" class="btn btn-secondary" id="btn-cancel-event-form">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="btn-submit-event">Adicionar à Agenda</button>
+                <button type="button" class="btn btn-secondary" id="btn-cancel-event-form">Cancelar</button>
               </div>
             </form>
           </div>
@@ -116,30 +116,30 @@
           <div class="surface-card">
             <div class="section-header">
               <div>
-                <h2>Need-To-Do Errands</h2>
-                <p class="section-desc">Deadlines, school prep, gifts, and logistics.</p>
+                <h2>Tarefas Pendentes</h2>
+                <p class="section-desc">Prazos, escola, presentes e pendências do dia a dia.</p>
               </div>
-              <button type="button" class="btn-plus-icon" id="btn-toggle-need-form" title="Add Need-To-Do errand" aria-label="Add Need-To-Do errand" aria-expanded="false">+</button>
+              <button type="button" class="btn-plus-icon" id="btn-toggle-need-form" title="Adicionar tarefa pendente" aria-label="Adicionar tarefa pendente" aria-expanded="false">+</button>
             </div>
 
             <div class="collapsible-drawer" id="need-item-drawer">
-              <h3 class="drawer-title">New Need-To-Do Errand</h3>
+              <h3 class="drawer-title">Nova Tarefa</h3>
               <form id="add-need-form" class="form-grid">
                 <div class="field-group full-width">
-                  <label for="need-item-title">What needs to be done?</label>
-                  <input type="text" id="need-item-title" required minlength="3" placeholder="e.g. Buy birthday gift, Renew passport" />
+                  <label for="need-item-title">O que precisa ser feito?</label>
+                  <input type="text" id="need-item-title" required minlength="3" placeholder="ex.: Comprar presente de aniversário, Renovar documento" />
                 </div>
                 <div class="field-group">
-                  <label for="need-item-deadline">Due date (optional)</label>
+                  <label for="need-item-deadline">Prazo (opcional)</label>
                   <input type="date" id="need-item-deadline" />
                 </div>
                 <div class="field-group">
-                  <label for="need-item-assigned">Owner / Assigned to</label>
+                  <label for="need-item-assigned">Responsável</label>
                   <select id="need-item-assigned" class="item-assigned-select"></select>
                 </div>
                 <div class="field-group full-width drawer-actions">
-                  <button type="submit" class="btn btn-primary">Save Errand</button>
-                  <button type="button" class="btn btn-secondary" id="btn-cancel-need-form">Cancel</button>
+                  <button type="submit" class="btn btn-primary">Salvar Tarefa</button>
+                  <button type="button" class="btn btn-secondary" id="btn-cancel-need-form">Cancelar</button>
                 </div>
               </form>
             </div>
@@ -150,30 +150,30 @@
           <div class="surface-card">
             <div class="section-header">
               <div>
-                <h2>Want-To-Do Wish List</h2>
-                <p class="section-desc">Movies, exhibitions, restaurants, and weekend ideas.</p>
+                <h2>Lista de Desejos</h2>
+                <p class="section-desc">Filmes, passeios, restaurantes e ideias em família.</p>
               </div>
-              <button type="button" class="btn-plus-icon" id="btn-toggle-want-form" title="Add Want-To-Do wish" aria-label="Add Want-To-Do wish" aria-expanded="false">+</button>
+              <button type="button" class="btn-plus-icon" id="btn-toggle-want-form" title="Adicionar item à lista de desejos" aria-label="Adicionar item à lista de desejos" aria-expanded="false">+</button>
             </div>
 
             <div class="collapsible-drawer" id="want-item-drawer">
-              <h3 class="drawer-title">New Want-To-Do Wish</h3>
+              <h3 class="drawer-title">Novo Desejo da Família</h3>
               <form id="add-want-form" class="form-grid">
                 <div class="field-group full-width">
-                  <label for="want-item-title">What would we like to do?</label>
-                  <input type="text" id="want-item-title" required minlength="3" placeholder="e.g. Watch movie before leaving cinemas" />
+                  <label for="want-item-title">O que gostaríamos de fazer?</label>
+                  <input type="text" id="want-item-title" required minlength="3" placeholder="ex.: Assistir ao filme antes de sair do cinema" />
                 </div>
                 <div class="field-group">
-                  <label for="want-item-deadline">Closing date (optional)</label>
+                  <label for="want-item-deadline">Data limite (opcional)</label>
                   <input type="date" id="want-item-deadline" />
                 </div>
                 <div class="field-group">
-                  <label for="want-item-assigned">Suggested for / Owner</label>
+                  <label for="want-item-assigned">Sugerido para / Responsável</label>
                   <select id="want-item-assigned" class="item-assigned-select"></select>
                 </div>
                 <div class="field-group full-width drawer-actions">
-                  <button type="submit" class="btn btn-primary">Save Wish</button>
-                  <button type="button" class="btn btn-secondary" id="btn-cancel-want-form">Cancel</button>
+                  <button type="submit" class="btn btn-primary">Salvar Desejo</button>
+                  <button type="button" class="btn btn-secondary" id="btn-cancel-want-form">Cancelar</button>
                 </div>
               </form>
             </div>
@@ -186,43 +186,73 @@
       <!-- VIEW 3: AI CONCIERGE -->
       <section class="view-panel" id="view-concierge">
         <div class="concierge-layout">
-          <aside class="surface-card chat-history-rail" aria-label="Chat session history">
+          <aside class="surface-card chat-history-rail" id="chat-history-rail" aria-label="Histórico de conversas">
             <div class="chat-rail-header">
-              <h2>Chat History</h2>
-              <button type="button" class="btn btn-primary btn-sm" id="btn-new-chat" title="Start a new parallel conversation">+ New Chat</button>
+              <h2>Conversas</h2>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-new-chat" title="Iniciar nova conversa">+ Nova</button>
             </div>
             <div class="chat-sessions-list" id="chat-sessions-list"></div>
           </aside>
 
           <div class="surface-card chat-box" id="chat-dropzone">
-            <div class="section-header">
-              <div>
-                <h2 id="active-chat-title">Family Ops AI Concierge</h2>
-                <p class="section-desc" id="chat-speaker-indicator">Speak, upload or paste an invitation photo, or type below.</p>
+            <div class="chat-topbar">
+              <div class="chat-topbar-titles">
+                <h2 id="active-chat-title">Concierge IA</h2>
+                <span class="chat-speaker-chip" id="chat-speaker-indicator"></span>
               </div>
-              <button type="button" class="btn btn-ghost-danger" id="btn-stop-request" style="display: none;" title="Stop ongoing request in this chat">⏹ Stop</button>
+              <div class="chat-topbar-actions">
+                <button type="button" class="icon-only-header-btn mobile-only-btn" id="btn-mobile-history" title="Histórico de conversas" aria-label="Histórico de conversas" aria-expanded="false">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                  </svg>
+                </button>
+                <button type="button" class="icon-only-header-btn mobile-only-btn" id="btn-mobile-new-chat" title="Nova conversa" aria-label="Nova conversa">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                  </svg>
+                </button>
+                <button type="button" class="icon-only-header-btn stop-icon-btn" id="btn-stop-request" style="display: none;" title="Parar resposta" aria-label="Parar resposta">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <rect x="4" y="4" width="16" height="16" rx="3"></rect>
+                  </svg>
+                </button>
+              </div>
             </div>
 
             <div class="feedback-banner" id="chat-feedback"></div>
 
-            <div class="prompt-starters">
-              <button type="button" class="starter-chip" data-prompt="What events, errands, and wishes do we have scheduled right now? Suggest how to organize our weekend.">Organize our weekend</button>
-              <button type="button" class="starter-chip" data-prompt="Which Want-To-Do wish-list items are open, and which free window on our calendar fits them best?">Fit a Wish-List outing</button>
-              <button type="button" class="starter-chip" data-prompt="Check our household profile, upcoming calendar conflicts, and open Need-To-Do errands.">Check conflicts & errands</button>
-            </div>
-
             <div class="chat-messages" id="chat-messages">
-              <div class="msg-bubble assistant">Hi! I'm your Family Ops Concierge. You can type below, speak with your microphone (🎤 Speak), or upload/paste a photo of a party invitation or school flyer (📷 Invite / Image) so we can organize your family schedule together!</div>
+              <div class="msg-bubble assistant">Olá! Como posso ajudar com a agenda ou as listas da família hoje?</div>
             </div>
 
             <div class="chat-attachment-strip" id="chat-attachment-strip"></div>
 
             <form class="chat-composer" id="chat-form">
               <input type="file" id="chat-file-input" accept="image/*,audio/*,application/pdf" multiple hidden />
-              <button type="button" class="btn btn-secondary" id="btn-attach-media" title="Upload invitation image, PDF flyer, or audio clip">📷 Invite / Image</button>
-              <button type="button" class="btn btn-secondary" id="btn-mic-record" title="Record a voice message to the Concierge">🎤 Speak</button>
-              <input type="text" id="chat-input" placeholder="Type, paste an image (Ctrl+V), or attach/record above..." autocomplete="off" />
-              <button type="submit" class="btn btn-primary" id="btn-send-chat">Send</button>
+              <div class="wa-input-pill">
+                <input type="text" id="chat-input" placeholder="Mensagem" autocomplete="off" />
+                <button type="button" class="wa-icon-btn" id="btn-attach-media" title="Anexar imagem ou arquivo" aria-label="Anexar imagem ou arquivo">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+                  </svg>
+                </button>
+                <button type="button" class="wa-icon-btn" id="btn-mic-record" title="Mensagem de voz" aria-label="Mensagem de voz">
+                  <svg class="mic-svg" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                    <line x1="12" y1="19" x2="12" y2="23"></line>
+                    <line x1="8" y1="23" x2="16" y2="23"></line>
+                  </svg>
+                  <span class="mic-timer-text" id="mic-timer-label"></span>
+                </button>
+              </div>
+              <button type="submit" class="wa-send-btn" id="btn-send-chat" title="Enviar" aria-label="Enviar">
+                <svg class="send-arrow-svg" width="19" height="19" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
+                </svg>
+                <span class="send-spinner" aria-hidden="true"></span>
+              </button>
             </form>
           </div>
         </div>
@@ -232,15 +262,15 @@
       <section class="view-panel" id="view-setup">
         <div class="surface-card">
           <div class="onboarding-callout" id="setup-welcome-banner">
-            Welcome to Family Ops Concierge! Set up your household name and family members below to get started. Once saved, the app will open straight to your AI Concierge.
+            Bem-vindo ao Family Ops Concierge! Configure o nome da sua família e os membros abaixo para começar. Depois de salvar, o aplicativo abrirá direto no Concierge IA.
           </div>
 
           <div class="section-header">
             <div>
-              <h2>Configure Your Family Household</h2>
-              <p class="section-desc">Set up your household name, language, timezone, optional shared passcode, and family members.</p>
+              <h2>Configurar Sua Família</h2>
+              <p class="section-desc">Defina o nome da família, fuso horário, senha compartilhada opcional e os membros da casa.</p>
             </div>
-            <button type="button" class="btn btn-secondary" id="btn-close-setup">Open AI Concierge</button>
+            <button type="button" class="btn btn-secondary" id="btn-close-setup">Abrir Concierge IA</button>
           </div>
 
           <div class="feedback-banner" id="setup-feedback"></div>
@@ -248,44 +278,44 @@
           <form id="household-setup-form">
             <div class="form-grid" style="margin-bottom: 20px;">
               <div class="field-group">
-                <label for="cfg-name">Household Name</label>
-                <input type="text" id="cfg-name" required placeholder="e.g. Rodrigues Family" />
+                <label for="cfg-name">Nome da Família</label>
+                <input type="text" id="cfg-name" required placeholder="ex.: Família Silva" />
               </div>
               <div class="field-group">
-                <label for="cfg-language">Default Language</label>
+                <label for="cfg-language">Idioma Padrão</label>
                 <select id="cfg-language">
-                  <option value="en" selected>English</option>
-                  <option value="pt-BR">Português (Brasil)</option>
+                  <option value="pt-BR" selected>Português (Brasil)</option>
+                  <option value="en">English</option>
                 </select>
               </div>
               <div class="field-group">
-                <label for="cfg-timezone">Timezone</label>
+                <label for="cfg-timezone">Fuso Horário</label>
                 <input type="text" id="cfg-timezone" value="America/Sao_Paulo" />
               </div>
               <div class="field-group">
-                <label for="cfg-buffer">Arrival Buffer for Sports/Music (min)</label>
+                <label for="cfg-buffer">Antecedência p/ Esportes e Música (min)</label>
                 <input type="number" id="cfg-buffer" min="0" max="120" value="30" />
               </div>
               <div class="field-group">
-                <label for="cfg-passcode">Shared Family Passcode (optional)</label>
-                <input type="password" id="cfg-passcode" placeholder="Leave blank to keep current" />
+                <label for="cfg-passcode">Senha Compartilhada da Família (opcional)</label>
+                <input type="password" id="cfg-passcode" placeholder="Deixe em branco para manter a atual" />
               </div>
             </div>
 
             <div class="section-header">
               <div>
-                <h2>Family Members</h2>
-                <p class="section-desc">Each member gets a quick-switch button at the top of the screen and personalized AI context.</p>
+                <h2>Membros da Família</h2>
+                <p class="section-desc">Cada membro ganha um botão rápido no topo da tela para alternar quem está falando.</p>
               </div>
-              <button type="button" class="btn btn-secondary" id="btn-add-member-row">+ Add Family Member</button>
+              <button type="button" class="btn btn-secondary" id="btn-add-member-row">+ Adicionar Membro</button>
             </div>
 
             <div id="setup-members-list"></div>
 
             <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; align-items: center;">
-              <button type="submit" class="btn btn-primary" id="btn-save-setup">Save & Open AI Concierge</button>
-              <button type="button" class="btn btn-secondary" id="btn-clear-passcode">Remove Passcode Lock</button>
-              <button type="button" class="btn btn-ghost-danger" id="btn-reset-household" style="margin-left: auto;">Reset Household</button>
+              <button type="submit" class="btn btn-primary" id="btn-save-setup">Salvar e Abrir Concierge IA</button>
+              <button type="button" class="btn btn-secondary" id="btn-clear-passcode">Remover Senha</button>
+              <button type="button" class="btn btn-ghost-danger" id="btn-reset-household" style="margin-left: auto;">Redefinir Família</button>
             </div>
           </form>
         </div>
@@ -293,34 +323,34 @@
         <div class="surface-card" id="gcal-setup-card">
           <div class="section-header">
             <div>
-              <h2>Family Google Calendar</h2>
-              <p class="section-desc">Add your shared Google Calendar link and approve access with your Google account so everyone's schedule stays in sync.</p>
+              <h2>Google Agenda da Família</h2>
+              <p class="section-desc">Adicione o link da agenda compartilhada e autorize com sua conta Google para manter tudo sincronizado.</p>
             </div>
-            <span class="gcal-status-pill" id="gcal-status-pill">Not connected</span>
+            <span class="gcal-status-pill" id="gcal-status-pill">Não conectado</span>
           </div>
 
           <div class="feedback-banner" id="gcal-feedback"></div>
 
           <div class="form-grid">
             <div class="field-group full-width">
-              <label for="gcal-link-input">Google Calendar Link</label>
+              <label for="gcal-link-input">Link do Google Agenda</label>
               <input
                 type="text"
                 id="gcal-link-input"
-                placeholder="Paste your Google Calendar share or embed link (https://calendar.google.com/...)"
+                placeholder="Cole o link de compartilhamento ou incorporação do Google Agenda (https://calendar.google.com/...)"
               />
             </div>
 
             <div class="field-group full-width" id="gcal-picker-group" style="display: none;">
-              <label for="gcal-calendar-picker">Active Calendar</label>
+              <label for="gcal-calendar-picker">Agenda Ativa</label>
               <select id="gcal-calendar-picker"></select>
             </div>
           </div>
 
           <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px;">
-            <button type="button" class="btn btn-primary" id="btn-gcal-connect">Connect & Approve with Google</button>
-            <button type="button" class="btn btn-secondary" id="btn-gcal-save" style="display: none;">Update Calendar Link</button>
-            <button type="button" class="btn btn-ghost-danger" id="btn-gcal-disconnect" style="display: none;">Disconnect</button>
+            <button type="button" class="btn btn-primary" id="btn-gcal-connect">Conectar e Autorizar com o Google</button>
+            <button type="button" class="btn btn-secondary" id="btn-gcal-save" style="display: none;">Atualizar Link da Agenda</button>
+            <button type="button" class="btn btn-ghost-danger" id="btn-gcal-disconnect" style="display: none;">Desconectar</button>
           </div>
         </div>
       </section>
@@ -330,16 +360,16 @@
   <!-- Household Passcode Unlock Modal -->
   <div class="modal-backdrop" id="passcode-modal" role="dialog" aria-modal="true" aria-labelledby="passcode-modal-title">
     <div class="modal-card">
-      <h2 id="passcode-modal-title" style="margin-top: 0;">Enter Family Passcode</h2>
-      <p class="section-desc" style="margin-bottom: 14px;">Enter your shared household passcode once on this device to unlock the calendar and lists.</p>
-      <div class="feedback-banner error" id="passcode-error">Incorrect passcode. Please try again.</div>
+      <h2 id="passcode-modal-title" style="margin-top: 0;">Digite a Senha da Família</h2>
+      <p class="section-desc" style="margin-bottom: 14px;">Digite a senha compartilhada uma vez neste aparelho para desbloquear a agenda e as listas.</p>
+      <div class="feedback-banner error" id="passcode-error">Senha incorreta. Tente novamente.</div>
       <form id="passcode-unlock-form" class="field-group">
-        <input type="password" id="unlock-passcode-input" placeholder="Family passcode" required />
-        <button type="submit" class="btn btn-primary" style="margin-top: 8px;">Unlock Household</button>
+        <input type="password" id="unlock-passcode-input" placeholder="Senha da família" required />
+        <button type="submit" class="btn btn-primary" style="margin-top: 8px;">Desbloquear</button>
       </form>
     </div>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=0.8.0"></script>
 </body>
 </html>

@@ -47,7 +47,7 @@
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
       const detail = data.detail || data;
-      const err = new Error(typeof detail === "string" ? detail : detail.message || "Request failed");
+      const err = new Error(typeof detail === "string" ? detail : detail.message || "Falha na requisição");
       err.detail = detail;
       throw err;
     }
@@ -56,7 +56,7 @@
 
   function getActiveMember() {
     const found = appState.members.find((m) => m.member_id === appState.activeMemberId);
-    return found || appState.members[0] || { member_id: "default", name: "Family", avatar: "🙂" };
+    return found || appState.members[0] || { member_id: "default", name: "Família", avatar: "🙂" };
   }
 
   function switchTab(targetId) {
@@ -89,16 +89,26 @@
     el.textContent = "";
   }
 
+  const RECURRENCE_LABELS = {
+    WEEKLY: "Semanal",
+    BIWEEKLY: "Quinzenal",
+    DAILY: "Diário",
+    MONTHLY: "Mensal",
+  };
+
   function formatTime(isoStr) {
     const d = new Date(isoStr);
     if (Number.isNaN(d.getTime())) return isoStr;
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleTimeString(appState.household.preferred_language || "pt-BR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   }
 
   function formatDayHeading(datePart) {
     const d = new Date(`${datePart}T12:00:00`);
     if (Number.isNaN(d.getTime())) return datePart;
-    return d.toLocaleDateString(appState.household.preferred_language || undefined, {
+    return d.toLocaleDateString(appState.household.preferred_language || "pt-BR", {
       weekday: "long",
       year: "numeric",
       month: "short",
@@ -169,7 +179,7 @@
     const isConfigured = Boolean(hh.is_configured);
     let todayFormatted = "";
     try {
-      todayFormatted = new Date().toLocaleDateString(hh.preferred_language || "en", {
+      todayFormatted = new Date().toLocaleDateString(hh.preferred_language || "pt-BR", {
         timeZone: getHouseholdTimezone(),
         weekday: "short",
         day: "2-digit",
@@ -177,17 +187,17 @@
         year: "numeric",
       });
     } catch (_err) {
-      todayFormatted = new Date().toLocaleDateString(hh.preferred_language || "en");
+      todayFormatted = new Date().toLocaleDateString(hh.preferred_language || "pt-BR");
     }
 
     document.getElementById("household-title").textContent = hh.household_name || "Family Ops Concierge";
     const gcalSuffix =
       appState.gcal && appState.gcal.active_sync
-        ? ` | 📅 Google Calendar: ${appState.gcal.calendar_summary || appState.gcal.calendar_id}`
+        ? ` | 📅 Google Agenda: ${appState.gcal.calendar_summary || appState.gcal.calendar_id}`
         : "";
     document.getElementById("household-rules-summary").textContent = isConfigured
-      ? `Today: ${todayFormatted}${gcalSuffix}`
-      : `Today: ${todayFormatted} | First-time Family Setup`;
+      ? `Hoje: ${todayFormatted}${gcalSuffix}`
+      : `Hoje: ${todayFormatted} | Configuração inicial da família`;
 
     const navEl = document.getElementById("primary-nav");
     const switcherEl = document.getElementById("active-member-switcher");
@@ -219,7 +229,7 @@
     });
 
     document.getElementById("chat-speaker-indicator").textContent =
-      `Speaking as ${active.avatar || "🙂"} ${active.name} - send text, voice (🎤), or an invitation image (📷 / Ctrl+V).`;
+      appState.members.length ? `${active.avatar || "🙂"} ${active.name}` : "";
 
     if (!appState.selectedEventParticipants.length && active.name) {
       appState.selectedEventParticipants = [active.name];
@@ -228,7 +238,7 @@
 
     document.querySelectorAll(".item-assigned-select").forEach((assignSelect) => {
       const prevVal = assignSelect.value;
-      assignSelect.innerHTML = `<option value="Anyone">Anyone in Family</option>`;
+      assignSelect.innerHTML = `<option value="Anyone">Qualquer pessoa da família</option>`;
       appState.members.forEach((m) => {
         const opt = document.createElement("option");
         opt.value = m.name;
@@ -250,7 +260,7 @@
     const allBtn = document.createElement("button");
     allBtn.type = "button";
     allBtn.className = `filter-chip ${isAll ? "active" : ""}`;
-    allBtn.textContent = "[All] Whole Family";
+    allBtn.textContent = "[All] Toda a Família";
     allBtn.addEventListener("click", () => {
       appState.selectedEventParticipants = ["All"];
       renderParticipantSelectorChips();
@@ -293,7 +303,7 @@
       const btn14 = document.createElement("button");
       btn14.type = "button";
       btn14.className = `filter-chip ${appState.calendarHorizon === "14D" ? "active" : ""}`;
-      btn14.textContent = "Next 14 Days";
+      btn14.textContent = "Próximos 14 dias";
       btn14.addEventListener("click", () => {
         appState.calendarHorizon = "14D";
         renderCalendar();
@@ -302,7 +312,7 @@
       const btnAll = document.createElement("button");
       btnAll.type = "button";
       btnAll.className = `filter-chip ${appState.calendarHorizon === "ALL" ? "active" : ""}`;
-      btnAll.textContent = `All Upcoming (${upcomingEvents.length})`;
+      btnAll.textContent = `Todos os futuros (${upcomingEvents.length})`;
       btnAll.addEventListener("click", () => {
         appState.calendarHorizon = "ALL";
         renderCalendar();
@@ -318,7 +328,7 @@
     const allChip = document.createElement("button");
     allChip.type = "button";
     allChip.className = `filter-chip ${appState.calendarFilter === "ALL" ? "active" : ""}`;
-    allChip.textContent = "All Family";
+    allChip.textContent = "Toda a Família";
     allChip.addEventListener("click", () => {
       appState.calendarFilter = "ALL";
       renderCalendar();
@@ -347,11 +357,17 @@
       }
       if (appState.calendarFilter === "ALL") return true;
       const p = (ev.participants || "").toLowerCase();
-      return p === "all" || p === "whole family" || p.includes(appState.calendarFilter.toLowerCase());
+      return (
+        p === "all" ||
+        p === "whole family" ||
+        p === "toda a família" ||
+        p === "toda a familia" ||
+        p.includes(appState.calendarFilter.toLowerCase())
+      );
     });
 
     if (!filtered.length) {
-      container.innerHTML = `<div class="empty-state">No upcoming events in this view. Click <strong>+</strong> above to add one, or ask the AI Concierge!</div>`;
+      container.innerHTML = `<div class="empty-state">Nenhum compromisso futuro nesta visualização. Toque em <strong>+</strong> acima para adicionar ou peça ao Concierge IA!</div>`;
       return;
     }
 
@@ -377,18 +393,18 @@
         <div class="event-time-col">
           ${
             allDay
-              ? `<span class="all-day-badge">All day</span>`
+              ? `<span class="all-day-badge">Dia inteiro</span>`
               : `<div>${formatTime(ev.start_iso)} - ${formatTime(ev.end_iso)}</div>`
           }
-          ${hasBuffer ? `<span class="buffer-tag">Buffer ${formatTime(ev.buffer_start_iso)}</span>` : ""}
+          ${hasBuffer ? `<span class="buffer-tag">Antecedência ${formatTime(ev.buffer_start_iso)}</span>` : ""}
         </div>
         <div class="event-main-col">
           <div class="event-title">${escapeHtml(ev.title)}</div>
           <div class="event-meta">
-            <span>👥 ${escapeHtml(ev.participants === "All" ? "All Family" : ev.participants)}</span>
+            <span>👥 ${escapeHtml(ev.participants === "All" ? "Toda a Família" : ev.participants)}</span>
             ${ev.location ? `<span>📍 ${escapeHtml(ev.location)}</span>` : ""}
-            ${isRecurring ? `<span>🔁 ${escapeHtml(ev.recurrence)}</span>` : ""}
-            <span>✍️ Added by ${escapeHtml(ev.created_by || "Family")}</span>
+            ${isRecurring ? `<span>🔁 ${escapeHtml(RECURRENCE_LABELS[ev.recurrence] || ev.recurrence)}</span>` : ""}
+            <span>✍️ Adicionado por ${escapeHtml(ev.created_by || "Família")}</span>
             ${ev.notes ? `<span>📝 ${escapeHtml(ev.notes)}</span>` : ""}
           </div>
         </div>
@@ -402,7 +418,7 @@
       const delBtn = document.createElement("button");
       delBtn.type = "button";
       delBtn.className = "btn btn-ghost-danger";
-      delBtn.textContent = isRecurring ? "Remove 1x" : "Remove";
+      delBtn.textContent = isRecurring ? "Remover 1x" : "Remover";
       delBtn.addEventListener("click", async () => {
         await apiFetch(`/api/events/${encodeURIComponent(ev.event_id)}`, { method: "DELETE" });
         await loadFullState();
@@ -413,7 +429,7 @@
         const delSeriesBtn = document.createElement("button");
         delSeriesBtn.type = "button";
         delSeriesBtn.className = "btn btn-ghost-danger";
-        delSeriesBtn.textContent = "Remove Series";
+        delSeriesBtn.textContent = "Remover Série";
         delSeriesBtn.addEventListener("click", async () => {
           await apiFetch(`/api/events/${encodeURIComponent(ev.event_id)}?delete_series=true`, {
             method: "DELETE",
@@ -438,13 +454,13 @@
     const wants = appState.items.filter((i) => i.item_type === "WANT_TO_DO");
 
     if (!needs.length) {
-      needEl.innerHTML = `<div class="empty-state">No open errands. Click <strong>+</strong> above to add one!</div>`;
+      needEl.innerHTML = `<div class="empty-state">Nenhuma tarefa pendente. Toque em <strong>+</strong> acima para adicionar!</div>`;
     } else {
       needs.forEach((item) => needEl.appendChild(buildItemRow(item)));
     }
 
     if (!wants.length) {
-      wantEl.innerHTML = `<div class="empty-state">No wish-list items yet. Click <strong>+</strong> above to add movies, outings, or family ideas!</div>`;
+      wantEl.innerHTML = `<div class="empty-state">Nenhum item na lista de desejos ainda. Toque em <strong>+</strong> acima para adicionar filmes, passeios ou ideias em família!</div>`;
     } else {
       wants.forEach((item) => wantEl.appendChild(buildItemRow(item)));
     }
@@ -468,13 +484,14 @@
       await loadFullState();
     });
 
+    const ownerDisplay = !item.assigned_to || item.assigned_to === "Anyone" ? "Qualquer pessoa" : item.assigned_to;
     const textCol = document.createElement("div");
     textCol.innerHTML = `
       <div class="item-title">${escapeHtml(item.title)}</div>
       <div class="item-sub">
-        ${item.deadline_or_closing_date ? `<span class="deadline-pill">By ${escapeHtml(item.deadline_or_closing_date)}</span>` : ""}
-        <span>Owner: ${escapeHtml(item.assigned_to || "Anyone")}</span> ·
-        <span>Added by ${escapeHtml(item.created_by || "Family")}</span>
+        ${item.deadline_or_closing_date ? `<span class="deadline-pill">Até ${escapeHtml(item.deadline_or_closing_date)}</span>` : ""}
+        <span>Responsável: ${escapeHtml(ownerDisplay)}</span> ·
+        <span>Adicionado por ${escapeHtml(item.created_by || "Família")}</span>
       </div>
     `;
 
@@ -485,7 +502,7 @@
     delBtn.type = "button";
     delBtn.className = "btn btn-ghost-danger";
     delBtn.textContent = "✕";
-    delBtn.title = "Delete item";
+    delBtn.title = "Excluir item";
     delBtn.addEventListener("click", async () => {
       await apiFetch(`/api/items/${encodeURIComponent(item.item_id)}`, {
         method: "PATCH",
@@ -505,13 +522,13 @@
     if (document.activeElement !== cfgNameEl) {
       cfgNameEl.value = hh.household_name || "";
     }
-    document.getElementById("cfg-language").value = hh.preferred_language || "en";
+    document.getElementById("cfg-language").value = hh.preferred_language || "pt-BR";
     document.getElementById("cfg-timezone").value = hh.timezone || "America/Sao_Paulo";
     document.getElementById("cfg-buffer").value = hh.sports_music_buffer_min ?? 30;
     document.getElementById("cfg-passcode").value = "";
     document.getElementById("cfg-passcode").placeholder = hh.has_passcode
-      ? "Passcode active (leave blank to keep)"
-      : "Optional PIN for family phones";
+      ? "Senha ativa (deixe em branco para manter)"
+      : "PIN opcional para os celulares da família";
 
     const listEl = document.getElementById("setup-members-list");
     listEl.innerHTML = "";
@@ -538,13 +555,13 @@
     if (g.active_sync) {
       statusPill.className = "gcal-status-pill connected";
       const acct = g.connected_email ? ` (${g.connected_email})` : "";
-      statusPill.textContent = `● Connected: ${g.calendar_summary || "Family Calendar"}${acct}`;
+      statusPill.textContent = `● Conectado: ${g.calendar_summary || "Agenda da Família"}${acct}`;
     } else if (g.is_connected) {
       statusPill.className = "gcal-status-pill connected";
-      statusPill.textContent = `● Connected${g.connected_email ? `: ${g.connected_email}` : ""}`;
+      statusPill.textContent = `● Conectado${g.connected_email ? `: ${g.connected_email}` : ""}`;
     } else {
       statusPill.className = "gcal-status-pill";
-      statusPill.textContent = "Not connected";
+      statusPill.textContent = "Não conectado";
     }
 
     if (linkInput && document.activeElement !== linkInput) {
@@ -553,8 +570,8 @@
 
     if (connectBtn) {
       connectBtn.textContent = g.is_connected
-        ? "Switch Google Account"
-        : "Connect & Approve with Google";
+        ? "Trocar Conta Google"
+        : "Conectar e Autorizar com o Google";
     }
     if (saveBtn) {
       saveBtn.style.display = g.is_connected ? "inline-flex" : "none";
@@ -575,11 +592,11 @@
     try {
       const data = await apiFetch("/api/gcal/calendars");
       appState.gcalCalendars = data.calendars || [];
-      selectEl.innerHTML = `<option value="">-- Choose a calendar from your account --</option>`;
+      selectEl.innerHTML = `<option value="">-- Escolha uma agenda da sua conta --</option>`;
       appState.gcalCalendars.forEach((c) => {
         const opt = document.createElement("option");
         opt.value = c.calendar_id;
-        opt.textContent = `${c.summary}${c.primary ? " (Personal)" : ""}`;
+        opt.textContent = `${c.summary}${c.primary ? " (Pessoal)" : ""}`;
         if (appState.gcal && c.calendar_id === appState.gcal.calendar_id) {
           opt.selected = true;
         }
@@ -600,16 +617,15 @@
     row.dataset.memberId = member.member_id || "";
 
     row.innerHTML = `
-      <input type="text" class="m-avatar" value="${escapeAttr(member.avatar || "🙂")}" maxlength="4" title="Emoji avatar" />
-      <input type="text" class="m-name" value="${escapeAttr(member.name || "")}" placeholder="Member name (e.g. Kid1)" required />
+      <input type="text" class="m-avatar" value="${escapeAttr(member.avatar || "🙂")}" maxlength="4" title="Emoji / avatar" />
+      <input type="text" class="m-name" value="${escapeAttr(member.name || "")}" placeholder="Nome do membro (ex.: Lucas)" required />
       <select class="m-role">
-        <option value="Parent" ${member.role === "Parent" ? "selected" : ""}>Parent</option>
-        <option value="Teen" ${member.role === "Teen" ? "selected" : ""}>Teen</option>
-        <option value="Child" ${member.role === "Child" ? "selected" : ""}>Child</option>
-        <option value="Relative" ${member.role === "Relative" ? "selected" : ""}>Relative</option>
+        <option value="Parent" ${member.role === "Parent" ? "selected" : ""}>Pai / Mãe</option>
+        <option value="Teen" ${member.role === "Teen" ? "selected" : ""}>Adolescente</option>
+        <option value="Child" ${member.role === "Child" ? "selected" : ""}>Criança</option>
+        <option value="Relative" ${member.role === "Relative" ? "selected" : ""}>Familiar</option>
       </select>
-      <input type="text" class="m-notes" value="${escapeAttr(member.routine_notes || "")}" placeholder="Routine/activities (e.g. Band rehearsal, soccer)" />
-      <button type="button" class="btn btn-ghost-danger m-remove">Remove</button>
+      <button type="button" class="btn btn-ghost-danger m-remove">Remover</button>
     `;
 
     row.querySelector(".m-remove").addEventListener("click", () => {
@@ -624,11 +640,13 @@
     return String(str || "")
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
   function escapeAttr(str) {
-    return escapeHtml(str).replace(/"/g, "&quot;");
+    return escapeHtml(str);
   }
 
   function renderAll() {
@@ -656,13 +674,13 @@
         switchTab("view-setup");
         showBanner(
           "gcal-feedback",
-          "Personal Google account connected! Verify or pick your shared Family Calendar below.",
+          "Conta Google conectada! Confirme ou escolha a Agenda da Família abaixo.",
           "success"
         );
         window.history.replaceState({}, "", window.location.pathname);
       } else if (params.get("gcal_error")) {
         switchTab("view-setup");
-        showBanner("gcal-feedback", `Google OAuth failed: ${params.get("gcal_error")}`, "error");
+        showBanner("gcal-feedback", `Falha na autenticação Google: ${params.get("gcal_error")}`, "error");
         window.history.replaceState({}, "", window.location.pathname);
       } else if (!appState.household || !appState.household.is_configured) {
         switchTab("view-setup");
@@ -708,10 +726,10 @@
       if (att.mime_type.startsWith("image/")) {
         const img = document.createElement("img");
         img.src = att.preview_url;
-        img.alt = att.filename || "Uploaded image";
+        img.alt = att.filename || "Imagem anexada";
         chip.appendChild(img);
         const label = document.createElement("span");
-        label.textContent = att.filename || "Invitation image";
+        label.textContent = att.filename || "Imagem / convite";
         chip.appendChild(label);
       } else if (att.mime_type.startsWith("audio/")) {
         const audio = document.createElement("audio");
@@ -720,7 +738,7 @@
         chip.appendChild(audio);
       } else {
         const docLabel = document.createElement("span");
-        docLabel.textContent = `📄 ${att.filename || "Attachment"}`;
+        docLabel.textContent = `📄 ${att.filename || "Anexo"}`;
         chip.appendChild(docLabel);
       }
 
@@ -728,7 +746,7 @@
       rmBtn.type = "button";
       rmBtn.className = "attachment-remove";
       rmBtn.textContent = "✕";
-      rmBtn.title = "Remove attachment";
+      rmBtn.title = "Remover anexo";
       rmBtn.addEventListener("click", () => {
         appState.pendingAttachments = appState.pendingAttachments.filter((x) => x.id !== att.id);
         renderPendingAttachments();
@@ -746,7 +764,7 @@
         const base64Part = dataUrl.includes(",") ? dataUrl.split(",", 2)[1] : dataUrl;
         resolve({ dataUrl, base64Part });
       };
-      reader.onerror = () => reject(new Error("Could not read file."));
+      reader.onerror = () => reject(new Error("Não foi possível ler o arquivo."));
       reader.readAsDataURL(blob);
     });
   }
@@ -756,17 +774,17 @@
     for (const file of Array.from(fileList || [])) {
       const mime = (file.type || "").toLowerCase();
       if (!mime.startsWith("image/") && !mime.startsWith("audio/") && mime !== "application/pdf") {
-        showBanner("chat-feedback", `Unsupported file '${file.name}'. Please upload an image, audio clip, or PDF.`, "error");
+        showBanner("chat-feedback", `Arquivo '${file.name}' não suportado. Envie uma imagem, áudio ou PDF.`, "error");
         continue;
       }
       if (file.size > 12 * 1024 * 1024) {
-        showBanner("chat-feedback", `File '${file.name}' exceeds the 12 MB limit.`, "error");
+        showBanner("chat-feedback", `O arquivo '${file.name}' excede o limite de 12 MB.`, "error");
         continue;
       }
       const { dataUrl, base64Part } = await fileOrBlobToBase64(file);
       appState.pendingAttachments.push({
         id: `att-${Math.random().toString(36).slice(2, 9)}`,
-        filename: file.name || "attachment",
+        filename: file.name || "anexo",
         mime_type: mime.split(";", 1)[0],
         data_base64: base64Part,
         preview_url: dataUrl,
@@ -802,13 +820,15 @@
       recordingStream = null;
     }
     const micBtn = document.getElementById("btn-mic-record");
-    micBtn.classList.remove("btn-recording");
-    micBtn.textContent = "🎤 Speak";
+    const timerEl = document.getElementById("mic-timer-label");
+    if (micBtn) micBtn.classList.remove("btn-recording");
+    if (timerEl) timerEl.textContent = "";
   }
 
   async function toggleMicRecording() {
     clearBanner("chat-feedback");
     const micBtn = document.getElementById("btn-mic-record");
+    const timerEl = document.getElementById("mic-timer-label");
 
     if (mediaRecorder && mediaRecorder.state === "recording") {
       mediaRecorder.stop();
@@ -818,7 +838,7 @@
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       showBanner(
         "chat-feedback",
-        "Microphone access is unavailable in this browser context. Use http://localhost:8080 or https://, or attach an audio file via '📷 Invite / Image'.",
+        "O microfone não está disponível neste navegador. Use https:// ou anexe um áudio pelo ícone de clipe.",
         "error"
       );
       return;
@@ -846,7 +866,7 @@
         const { dataUrl, base64Part } = await fileOrBlobToBase64(blob);
         appState.pendingAttachments.push({
           id: `voice-${Math.random().toString(36).slice(2, 9)}`,
-          filename: "voice-message.webm",
+          filename: "mensagem-de-voz.webm",
           mime_type: actualMime,
           data_base64: base64Part,
           preview_url: dataUrl,
@@ -858,18 +878,18 @@
       mediaRecorder.start();
       recordingStartedAt = Date.now();
       micBtn.classList.add("btn-recording");
-      micBtn.textContent = "⏹ Stop (0:00)";
+      if (timerEl) timerEl.textContent = "0:00";
       recordingTimerId = setInterval(() => {
         const sec = Math.floor((Date.now() - recordingStartedAt) / 1000);
         const mm = Math.floor(sec / 60);
         const ss = String(sec % 60).padStart(2, "0");
-        micBtn.textContent = `⏹ Stop (${mm}:${ss})`;
+        if (timerEl) timerEl.textContent = `${mm}:${ss}`;
       }, 500);
     } catch (err) {
       stopMicStream();
       showBanner(
         "chat-feedback",
-        `Could not access microphone (${err.message}). Check browser/Remote Desktop mic permission, or upload an audio clip via '📷 Invite / Image'.`,
+        `Não foi possível acessar o microfone (${err.message}). Verifique a permissão do navegador ou anexe um áudio.`,
         "error"
       );
     }
@@ -965,7 +985,6 @@
         avatar: r.querySelector(".m-avatar").value.trim() || "🙂",
         name: r.querySelector(".m-name").value.trim(),
         role: r.querySelector(".m-role").value,
-        routine_notes: r.querySelector(".m-notes").value.trim(),
       }))
       .filter((m) => m.name.length >= 1);
   }
@@ -992,7 +1011,7 @@
       clearBanner("gcal-feedback");
       try {
         await saveGcalLinkSetting(true);
-        showBanner("gcal-feedback", "Family Google Calendar updated!", "success");
+        showBanner("gcal-feedback", "Google Agenda da família atualizada!", "success");
       } catch (err) {
         showBanner("gcal-feedback", err.message, "error");
       }
@@ -1042,7 +1061,7 @@
         clearBanner("gcal-feedback");
         try {
           await saveGcalLinkSetting(true);
-          showBanner("gcal-feedback", "Switched active Family Google Calendar!", "success");
+          showBanner("gcal-feedback", "Agenda ativa da família alterada!", "success");
         } catch (err) {
           showBanner("gcal-feedback", err.message, "error");
         }
@@ -1060,7 +1079,7 @@
         appState.gcalCalendars = [];
         appState.events = res.events || [];
         renderAll();
-        showBanner("gcal-feedback", "Google Calendar disconnected.", "success");
+        showBanner("gcal-feedback", "Google Agenda desconectada.", "success");
       } catch (err) {
         showBanner("gcal-feedback", err.message, "error");
       }
@@ -1072,7 +1091,7 @@
     e.preventDefault();
     clearBanner("event-feedback");
     if (!appState.selectedEventParticipants.length) {
-      showBanner("event-feedback", "Please select who is participating ([All] or specific family member(s)).", "error");
+      showBanner("event-feedback", "Selecione quem vai participar ([All] ou membro(s) da família).", "error");
       return;
     }
     const active = getActiveMember();
@@ -1108,13 +1127,13 @@
       } catch (firstErr) {
         if (firstErr.detail && firstErr.detail.error_code === "OVERLAP_CONFIRMATION_REQUIRED") {
           const accepted = window.confirm(
-            `Same-Member Overlap Notice:\n\n${firstErr.detail.message}\n\n` +
-            `Do you want to add this event anyway?`
+            `Aviso de Conflito de Horário:\n\n${firstErr.detail.message}\n\n` +
+            `Deseja agendar este compromisso mesmo assim?`
           );
           if (!accepted) {
             showBanner(
               "event-feedback",
-              "Event was not added. Adjust the date/time if you want to avoid the overlap, or submit again to confirm.",
+              "O evento não foi adicionado. Ajuste a data/horário se quiser evitar o conflito ou envie novamente para confirmar.",
               "error"
             );
             return;
@@ -1130,11 +1149,11 @@
       e.target.reset();
       setDrawerOpen("event-form-drawer", "btn-toggle-event-form", false);
       await loadFullState();
-      const countMsg = res.occurrences_created > 1 ? ` (${res.occurrences_created} repetitions added)` : "";
-      const overlapMsg = res.overlap_warnings && res.overlap_warnings.length ? " (overlap confirmed)" : "";
-      showBanner("event-feedback", `Event scheduled on the shared Family Calendar${countMsg}${overlapMsg}!`, "success");
+      const countMsg = res.occurrences_created > 1 ? ` (${res.occurrences_created} repetições adicionadas)` : "";
+      const overlapMsg = res.overlap_warnings && res.overlap_warnings.length ? " (conflito confirmado)" : "";
+      showBanner("event-feedback", `Compromisso agendado na Agenda da Família${countMsg}${overlapMsg}!`, "success");
     } catch (err) {
-      const hint = err.detail && err.detail.recovery_hint ? ` Tip: ${err.detail.recovery_hint}` : "";
+      const hint = err.detail && err.detail.recovery_hint ? ` Dica: ${err.detail.recovery_hint}` : "";
       showBanner("event-feedback", `${err.message}${hint}`, "error");
     }
   });
@@ -1157,7 +1176,7 @@
       formEl.reset();
       setDrawerOpen(drawerId, btnId, false);
       await loadFullState();
-      showBanner("item-feedback", "Saved to shared list!", "success");
+      showBanner("item-feedback", "Salvo na lista compartilhada!", "success");
     } catch (err) {
       showBanner("item-feedback", err.message, "error");
     }
@@ -1199,7 +1218,7 @@
     clearBanner("setup-feedback");
     const members = collectSetupFormMembers();
     if (!members.length) {
-      showBanner("setup-feedback", "Please enter at least one family member.", "error");
+      showBanner("setup-feedback", "Adicione pelo menos um membro da família.", "error");
       return;
     }
 
@@ -1234,7 +1253,7 @@
     await apiFetch("/api/household/setup", {
       method: "PUT",
       body: JSON.stringify({
-        household_name: document.getElementById("cfg-name").value.trim() || "Our Family",
+        household_name: document.getElementById("cfg-name").value.trim() || "Nossa Família",
         preferred_language: document.getElementById("cfg-language").value,
         timezone: document.getElementById("cfg-timezone").value.trim(),
         sports_music_buffer_min: Number(document.getElementById("cfg-buffer").value || 30),
@@ -1244,14 +1263,14 @@
     });
     localStorage.removeItem(PASSCODE_KEY);
     await loadFullState();
-    showBanner("setup-feedback", "Passcode lock removed.", "success");
+    showBanner("setup-feedback", "Senha removida.", "success");
   });
 
   const resetHouseholdBtn = document.getElementById("btn-reset-household");
   if (resetHouseholdBtn) {
     resetHouseholdBtn.addEventListener("click", async () => {
       const ok = window.confirm(
-        "Reset household configuration, local events, lists, and chats back to a brand-new user state?"
+        "Redefinir as configurações da família, eventos locais, listas e conversas para o estado inicial de novo usuário?"
       );
       if (!ok) return;
       try {
@@ -1314,7 +1333,16 @@
   // --- MULTI-SESSION CHAT HISTORY & NON-BLOCKING CONCURRENCY ---
 
   const DEFAULT_WELCOME_TEXT =
-    "Hi! I'm your Family Ops Concierge. You can type below, speak with your microphone (🎤 Speak), or upload/paste a photo of a party invitation or school flyer (📷 Invite / Image) so we can organize your family schedule together!";
+    "Olá! Como posso ajudar com a agenda ou as listas da família hoje?";
+
+  function setMobileHistoryOpen(open) {
+    const rail = document.getElementById("chat-history-rail");
+    const btn = document.getElementById("btn-mobile-history");
+    if (!rail || !btn) return;
+    rail.classList.toggle("mobile-open", open);
+    btn.classList.toggle("active", open);
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+  }
 
   function syncComposerControls() {
     const isBusy = inflightBySession.has(appState.sessionId);
@@ -1324,17 +1352,17 @@
 
     if (sendBtn) {
       sendBtn.disabled = isBusy;
-      sendBtn.textContent = isBusy ? "Thinking..." : "Send";
+      sendBtn.classList.toggle("is-busy", isBusy);
     }
     if (stopBtn) {
-      stopBtn.style.display = isBusy ? "inline-flex" : "none";
+      stopBtn.style.display = isBusy ? "inline-grid" : "none";
     }
     if (chatTitleEl) {
       const meta = appState.chatSessions.find((s) => s.session_id === appState.sessionId);
       chatTitleEl.textContent =
-        meta && meta.title && meta.title !== "New Chat"
+        meta && meta.title && meta.title !== "New Chat" && meta.title !== "Nova Conversa"
           ? meta.title
-          : "Family Ops AI Concierge";
+          : "Concierge IA";
     }
   }
 
@@ -1347,10 +1375,10 @@
     if (!sessionsToRender.some((s) => s.session_id === appState.sessionId)) {
       sessionsToRender.unshift({
         session_id: appState.sessionId,
-        title: "New Chat",
+        title: "Nova Conversa",
         status: inflightBySession.has(appState.sessionId) ? "running" : "idle",
         message_count: (appState.messagesBySession[appState.sessionId] || []).length,
-        last_preview: "Fresh conversation",
+        last_preview: "Nova conversa",
       });
     }
 
@@ -1366,7 +1394,8 @@
 
       const titleDiv = document.createElement("div");
       titleDiv.className = "session-item-title";
-      titleDiv.textContent = sess.title || "New Chat";
+      titleDiv.textContent =
+        !sess.title || sess.title === "New Chat" ? "Nova Conversa" : sess.title;
       main.appendChild(titleDiv);
 
       const metaDiv = document.createElement("div");
@@ -1374,17 +1403,17 @@
       if (isRunningLocal) {
         const badge = document.createElement("span");
         badge.className = "session-status-badge running";
-        badge.textContent = "⏳ Thinking...";
+        badge.textContent = "⏳ Pensando...";
         metaDiv.appendChild(badge);
       } else if (needsApproval) {
         const badge = document.createElement("span");
         badge.className = "session-status-badge approval";
-        badge.textContent = "🛡️ Approval";
+        badge.textContent = "🛡️ Aprovação";
         metaDiv.appendChild(badge);
       }
       const countSpan = document.createElement("span");
       const count = Number(sess.message_count || 0);
-      countSpan.textContent = count > 0 ? `${count} msg${count === 1 ? "" : "s"}` : "Empty";
+      countSpan.textContent = count > 0 ? `${count} msg${count === 1 ? "" : "s"}` : "Vazia";
       metaDiv.appendChild(countSpan);
       main.appendChild(metaDiv);
 
@@ -1395,7 +1424,7 @@
         delBtn.type = "button";
         delBtn.className = "session-delete-btn";
         delBtn.textContent = "✕";
-        delBtn.title = "Delete chat session";
+        delBtn.title = "Excluir conversa";
         delBtn.addEventListener("click", async (ev) => {
           ev.stopPropagation();
           await deleteChatSession(sess.session_id);
@@ -1404,6 +1433,7 @@
       }
 
       row.addEventListener("click", async () => {
+        setMobileHistoryOpen(false);
         if (appState.sessionId === sess.session_id) return;
         await switchChatSession(sess.session_id);
       });
@@ -1590,65 +1620,65 @@
 
     // 1. Participant selection question
     if (
-      /\b(which\s+family\s+member|who\s+will\s+(?:be\s+)?(?:attend|participat|go)|who\s+is\s+(?:attending|participating|going)|participants?|quem\s+vai|qual\s+membro)\b/i.test(
+      /\b(which\s+family\s+member|who\s+will\s+(?:be\s+)?(?:attend|participat|go)|who\s+is\s+(?:attending|participating|going)|participants?|quem\s+vai|quem\s+da\s+fam[íi]lia|qual\s+membro)\b/i.test(
         combined
       )
     ) {
       const members = appState.members || [];
       members.slice(0, 4).forEach((m) => {
         chips.push({
-          label: `${m.avatar || "🙂"} Only ${m.name}`,
-          prompt: `Only ${m.name} will participate.`,
+          label: `${m.avatar || "🙂"} Apenas ${m.name}`,
+          prompt: `Apenas ${m.name} vai participar.`,
         });
       });
       const kids = members.filter((m) => m.role === "Teen" || m.role === "Child");
       if (kids.length >= 2) {
-        const kidNames = kids.map((k) => k.name).join(" and ");
+        const kidNames = kids.map((k) => k.name).join(" e ");
         chips.push({
-          label: `🧒 Both ${kidNames}`,
-          prompt: `${kidNames} will participate.`,
+          label: `🧒 ${kidNames}`,
+          prompt: `${kidNames} vão participar.`,
         });
       }
       chips.push({
-        label: "👨‍👩‍👧‍👦 [All] Whole Family",
-        prompt: "[All] The whole family will participate.",
+        label: "👨‍👩‍👧‍👦 [All] Toda a Família",
+        prompt: "[All] Toda a família vai participar.",
       });
       return chips.slice(0, 5);
     }
 
     // 2. Overlap / arrival-buffer verbal confirmation question
-    if (/\b(anyway|despite\s+the\s+overlap|overlap|arrival[- ]buffer|mesmo\s+assim)\b/i.test(combined)) {
+    if (/\b(anyway|despite\s+the\s+overlap|overlap|arrival[- ]buffer|mesmo\s+assim|conflito)\b/i.test(combined)) {
       return [
-        { label: "✓ Yes, schedule it anyway", prompt: "Yes, please schedule it anyway." },
-        { label: "🕒 Suggest a free time slot", prompt: "Please suggest a conflict-free time slot on that day instead." },
-        { label: "✕ Skip for now", prompt: "Skip scheduling this event for now." },
+        { label: "✓ Sim, agendar mesmo assim", prompt: "Sim, pode agendar mesmo assim." },
+        { label: "🕒 Sugerir horário livre", prompt: "Pode sugerir um horário livre sem conflito nesse dia?" },
+        { label: "✕ Pular por enquanto", prompt: "Pular este agendamento por enquanto." },
       ];
     }
 
     // 3. Linked Need-To-Do errand / gift reminder question
     if (/\b(need-to-do|errand|buy\s+a?\s*gift|birthday\s+gift|shopping|wish\s*list|tarefa|presente)\b/i.test(combined)) {
       return [
-        { label: "✓ Yes, add to Need-To-Do", prompt: "Yes, please add that item to our Need-To-Do errands list." },
-        { label: "✏️ Customize errand...", prefill: "Add to Need-To-Do: " },
-        { label: "✕ No extra errand needed", prompt: "No thanks, no extra errand needed right now." },
+        { label: "✓ Sim, adicionar às Tarefas", prompt: "Sim, adicione esse item à nossa lista de Tarefas Pendentes." },
+        { label: "✏️ Personalizar tarefa...", prefill: "Adicionar às Tarefas: " },
+        { label: "✕ Não precisa", prompt: "Não precisa adicionar tarefa extra agora, obrigado." },
       ];
     }
 
     // 4. Weekend / multi-slot plan selection
     if (/\b(weekend|saturday|sunday|proposed\s+plan|which\s+(?:slot|option|window)|fim\s+de\s+semana|s[áa]bado|domingo)\b/i.test(combined)) {
       return [
-        { label: "✓ Looks great, book these slots", prompt: "That plan looks great! Please schedule those proposed slots." },
-        { label: "🕒 Try different times", prompt: "Can you suggest alternative time windows for this plan?" },
-        { label: "✏️ Adjust one detail...", prefill: "Let's adjust the plan: " },
+        { label: "✓ Ótimo, agendar esses horários", prompt: "Ótimo plano! Pode agendar esses horários sugeridos." },
+        { label: "🕒 Sugerir outros horários", prompt: "Pode sugerir outros horários alternativos para esse plano?" },
+        { label: "✏️ Ajustar um detalhe...", prefill: "Vamos ajustar um detalhe: " },
       ];
     }
 
     // 5. Generic question fallback
     if (extractedQuestion || /\?\s*$/.test(cleanText)) {
       return [
-        { label: "✓ Yes, go ahead", prompt: "Yes, please go ahead." },
-        { label: "✏️ Let me clarify...", prefill: "" },
-        { label: "✕ No thanks", prompt: "No thanks." },
+        { label: "✓ Sim, pode seguir", prompt: "Sim, pode seguir." },
+        { label: "✏️ Deixe-me explicar...", prefill: "" },
+        { label: "✕ Agora não", prompt: "Agora não, obrigado." },
       ];
     }
 
@@ -1670,7 +1700,7 @@
 
     const lbl = document.createElement("div");
     lbl.className = "chat-warning-label";
-    lbl.textContent = "Schedule / Household Warning";
+    lbl.textContent = "Aviso de Agenda";
     body.appendChild(lbl);
 
     const txt = document.createElement("div");
@@ -1696,7 +1726,7 @@
 
     const lbl = document.createElement("div");
     lbl.className = "chat-action-label";
-    lbl.textContent = "Action / Confirmation Requested";
+    lbl.textContent = "Confirmação Necessária";
     body.appendChild(lbl);
 
     const q = document.createElement("div");
@@ -1842,7 +1872,7 @@
             const img = document.createElement("img");
             img.className = "bubble-media-img";
             img.src = att.preview_url;
-            img.alt = att.filename || "Uploaded invitation";
+            img.alt = att.filename || "Convite enviado";
             mediaWrap.appendChild(img);
           } else if (att.preview_url && att.mime_type && att.mime_type.startsWith("audio/")) {
             const audio = document.createElement("audio");
@@ -1853,7 +1883,7 @@
           } else {
             const icon = att.mime_type && att.mime_type.startsWith("audio/") ? "🎤" : "📎";
             const docTag = document.createElement("div");
-            docTag.textContent = `${icon} ${att.filename || "Attachment"}`;
+            docTag.textContent = `${icon} ${att.filename || "Anexo"}`;
             mediaWrap.appendChild(docTag);
           }
         });
@@ -1905,13 +1935,13 @@
       const hdr = document.createElement("div");
       hdr.className = "hitl-confirm-header";
       hdr.textContent = hasWarn
-        ? "⚠️ Schedule / Arrival-Buffer Overlap Warning"
-        : "🛡️ Human-in-the-Loop Confirmation Required";
+        ? "⚠️ Aviso de Conflito de Horário"
+        : "🛡️ Confirmação Necessária";
       card.appendChild(hdr);
 
       const sum = document.createElement("div");
       sum.className = "hitl-confirm-summary";
-      sum.textContent = conf.summary || `Confirm ${conf.tool_name}`;
+      sum.textContent = conf.summary || `Confirmar ${conf.tool_name}`;
       card.appendChild(sum);
 
       if (hasWarn) {
@@ -1930,7 +1960,7 @@
         const warnNote = document.createElement("div");
         warnNote.className = "hitl-warning-note";
         warnNote.innerHTML =
-          "<strong>Do you want to add this entry to the Family Calendar anyway?</strong> Parallel activities are allowed when confirmed.";
+          "<strong>Deseja adicionar este compromisso na Agenda da Família mesmo assim?</strong> Ele será agendado assim que você confirmar.";
         warnBox.appendChild(warnNote);
 
         card.appendChild(warnBox);
@@ -1942,23 +1972,23 @@
       if (conf.resolved) {
         const resolvedSpan = document.createElement("span");
         resolvedSpan.className = "hitl-status-pill";
-        resolvedSpan.textContent = conf.resolution_label || "Decision recorded";
+        resolvedSpan.textContent = conf.resolution_label || "Decisão registrada";
         actions.appendChild(resolvedSpan);
       } else {
         const approveBtn = document.createElement("button");
         approveBtn.type = "button";
         approveBtn.className = "btn btn-primary";
-        approveBtn.textContent = hasWarn ? "✓ Yes, Add Event Anyway" : "✓ Approve & Run";
+        approveBtn.textContent = hasWarn ? "✓ Sim, Agendar Mesmo Assim" : "✓ Aprovar e Executar";
 
         const cancelBtn = document.createElement("button");
         cancelBtn.type = "button";
         cancelBtn.className = "btn btn-secondary";
-        cancelBtn.textContent = "✕ Cancel";
+        cancelBtn.textContent = "✕ Cancelar";
 
         const handleDecision = async (approved, followUpPrompt = "") => {
           approveBtn.disabled = true;
           cancelBtn.disabled = true;
-          actions.innerHTML = `<span class="hitl-status-pill">${approved ? "Approving & saving..." : "Cancelling action..."}</span>`;
+          actions.innerHTML = `<span class="hitl-status-pill">${approved ? "Aprovando e salvando..." : "Cancelando ação..."}</span>`;
           await submitToolConfirmation(sessionIdForActions, conf.confirmation_call_id, approved);
           if (followUpPrompt) {
             await sendChatMessage(followUpPrompt);
@@ -1975,10 +2005,10 @@
           const altSlotBtn = document.createElement("button");
           altSlotBtn.type = "button";
           altSlotBtn.className = "smart-reply-chip";
-          altSlotBtn.textContent = "🕒 Suggest a free slot instead";
+          altSlotBtn.textContent = "🕒 Sugerir outro horário livre";
           altSlotBtn.addEventListener("click", () => {
             altSlotBtn.disabled = true;
-            handleDecision(false, "Please suggest a conflict-free time slot on that day instead.");
+            handleDecision(false, "Pode sugerir um horário livre sem conflito nesse dia?");
           });
           actions.appendChild(altSlotBtn);
         }
@@ -2002,7 +2032,7 @@
 
         const chipsLabel = document.createElement("div");
         chipsLabel.className = "smart-chips-label";
-        chipsLabel.textContent = "Quick answers (click to reply):";
+        chipsLabel.textContent = "Respostas rápidas (toque para responder):";
         chipsWrap.appendChild(chipsLabel);
 
         const chipsRow = document.createElement("div");
@@ -2078,7 +2108,7 @@
     if (inflight) {
       const pendingBubble = document.createElement("div");
       pendingBubble.className = "msg-bubble assistant";
-      pendingBubble.textContent = inflight.statusText || "Checking household schedule & lists...";
+      pendingBubble.textContent = inflight.statusText || "Verificando a agenda e as listas da família...";
       messagesEl.appendChild(pendingBubble);
     }
 
@@ -2090,7 +2120,7 @@
     const controller = new AbortController();
     inflightBySession.set(targetSessionId, {
       controller,
-      statusText: confirmed ? "Applying approved calendar update..." : "Recording cancellation...",
+      statusText: confirmed ? "Aplicando atualização aprovada na agenda..." : "Registrando cancelamento...",
     });
 
     const localMsgs = appState.messagesBySession[targetSessionId] || [];
@@ -2098,7 +2128,7 @@
       (m.pending_confirmations || []).forEach((c) => {
         if (c.confirmation_call_id === confirmationCallId) {
           c.resolved = true;
-          c.resolution_label = `${confirmed ? "✓ Approved" : "✕ Cancelled"} by ${active.name}`;
+          c.resolution_label = `${confirmed ? "✓ Aprovado" : "✕ Cancelado"} por ${active.name}`;
         }
       });
     });
@@ -2131,7 +2161,7 @@
       if (err.name !== "AbortError") {
         (appState.messagesBySession[targetSessionId] = appState.messagesBySession[targetSessionId] || []).push({
           role: "assistant",
-          content: `Error submitting confirmation: ${err.message}`,
+          content: `Erro ao enviar confirmação: ${err.message}`,
           models_used: [],
           tool_calls: [],
           pending_confirmations: [],
@@ -2152,7 +2182,7 @@
     if (inflightBySession.has(targetSessionId)) {
       showBanner(
         "chat-feedback",
-        "This chat is still thinking. Click '+ New Chat' on the left to ask something in parallel, or click '⏹ Stop'.",
+        "Esta conversa ainda está respondendo. Toque em '+' para iniciar outra conversa em paralelo ou no ícone de parar.",
         "error"
       );
       return;
@@ -2161,8 +2191,8 @@
     const active = getActiveMember();
     const displayCaption = text
       || (stagedAttachments.some((a) => a.mime_type.startsWith("audio/"))
-        ? "Sent a voice message"
-        : "Attached an invitation/image");
+        ? "Enviou uma mensagem de voz"
+        : "Enviou uma imagem/convite");
 
     const optimisticUserMsg = {
       role: "user",
@@ -2193,8 +2223,8 @@
     inflightBySession.set(targetSessionId, {
       controller,
       statusText: stagedAttachments.length
-        ? "Reading attachment & checking household schedule..."
-        : "Checking household schedule & lists...",
+        ? "Lendo anexo e verificando a agenda da família..."
+        : "Verificando a agenda e as listas da família...",
     });
 
     renderActiveSessionMessages();
@@ -2242,7 +2272,7 @@
       if (err.name === "AbortError") {
         msgList.push({
           role: "assistant",
-          content: "(Request stopped. You can send a new message anytime.)",
+          content: "(Resposta interrompida. Você pode enviar uma nova mensagem a qualquer momento.)",
           models_used: [],
           tool_calls: [],
           pending_confirmations: [],
@@ -2250,7 +2280,7 @@
       } else {
         msgList.push({
           role: "assistant",
-          content: `Error talking to Concierge: ${err.message}`,
+          content: `Erro ao falar com o Concierge: ${err.message}`,
           models_used: [],
           tool_calls: [],
           pending_confirmations: [],
@@ -2269,14 +2299,14 @@
   document.getElementById("chat-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     if (mediaRecorder && mediaRecorder.state === "recording") {
-      showBanner("chat-feedback", "Click '⏹ Stop' first to finish your voice recording, then press Send.", "error");
+      mediaRecorder.stop();
       return;
     }
     const input = document.getElementById("chat-input");
     const text = input.value.trim();
     const attachmentsToSend = [...appState.pendingAttachments];
     if (!text && !attachmentsToSend.length) {
-      showBanner("chat-feedback", "Type a message, record a voice note (🎤), or attach an image (📷).", "error");
+      input.focus();
       return;
     }
     input.value = "";
@@ -2285,13 +2315,26 @@
     await sendChatMessage(text, attachmentsToSend);
   });
 
-  document.querySelectorAll(".starter-chip").forEach((chip) => {
-    chip.addEventListener("click", () => sendChatMessage(chip.dataset.prompt, []));
-  });
-
   const newChatBtn = document.getElementById("btn-new-chat");
   if (newChatBtn) {
     newChatBtn.addEventListener("click", () => {
+      setMobileHistoryOpen(false);
+      startNewChatSession();
+    });
+  }
+
+  const mobileHistoryBtn = document.getElementById("btn-mobile-history");
+  if (mobileHistoryBtn) {
+    mobileHistoryBtn.addEventListener("click", () => {
+      const rail = document.getElementById("chat-history-rail");
+      setMobileHistoryOpen(rail ? !rail.classList.contains("mobile-open") : false);
+    });
+  }
+
+  const mobileNewChatBtn = document.getElementById("btn-mobile-new-chat");
+  if (mobileNewChatBtn) {
+    mobileNewChatBtn.addEventListener("click", () => {
+      setMobileHistoryOpen(false);
       startNewChatSession();
     });
   }

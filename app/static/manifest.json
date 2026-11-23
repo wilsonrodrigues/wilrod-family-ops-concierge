@@ -1,7 +1,7 @@
 {
   "name": "Family Ops Concierge",
   "short_name": "Family Ops",
-  "description": "Shared Family Calendar, Need-To-Do Errands, Want-To-Do Wishes, and AI Concierge",
+  "description": "Agenda compartilhada da família, tarefas pendentes, lista de desejos e Concierge IA",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#faf7f2",

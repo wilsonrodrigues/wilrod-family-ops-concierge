@@ -183,9 +183,9 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS household_config (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
-                household_name TEXT NOT NULL DEFAULT 'Foobar Family',
+                household_name TEXT NOT NULL DEFAULT '',
                 timezone TEXT NOT NULL DEFAULT 'America/Sao_Paulo',
-                preferred_language TEXT NOT NULL DEFAULT 'en',
+                preferred_language TEXT NOT NULL DEFAULT 'pt-BR',
                 passcode_hash TEXT NOT NULL DEFAULT '',
                 sports_music_buffer_min INTEGER NOT NULL DEFAULT 30,
                 is_configured INTEGER NOT NULL DEFAULT 0,
@@ -318,7 +318,7 @@ def init_db() -> None:
                     INSERT OR REPLACE INTO household_config (
                         id, household_name, timezone, preferred_language, passcode_hash,
                         sports_music_buffer_min, is_configured, updated_at
-                    ) VALUES (1, '', 'America/Sao_Paulo', 'en', '', 30, 0, ?)
+                    ) VALUES (1, '', 'America/Sao_Paulo', 'pt-BR', '', 30, 0, ?)
                     """,
                     (now_iso,),
                 )
@@ -435,7 +435,7 @@ def init_db() -> None:
             INSERT INTO household_config (
                 id, household_name, timezone, preferred_language, passcode_hash,
                 sports_music_buffer_min, is_configured, updated_at
-            ) VALUES (1, '', 'America/Sao_Paulo', 'en', '', 30, 0, ?)
+            ) VALUES (1, '', 'America/Sao_Paulo', 'pt-BR', '', 30, 0, ?)
             """,
             (now_iso,),
         )
@@ -461,7 +461,7 @@ def reset_household_to_new_user() -> dict[str, Any]:
             UPDATE household_config
             SET household_name = '',
                 timezone = 'America/Sao_Paulo',
-                preferred_language = 'en',
+                preferred_language = 'pt-BR',
                 passcode_hash = '',
                 sports_music_buffer_min = 30,
                 is_configured = 0,
@@ -536,7 +536,7 @@ def save_household_setup(
             (
                 household_name.strip(),
                 timezone_str.strip() or "America/Sao_Paulo",
-                preferred_language.strip() or "en",
+                preferred_language.strip() or "pt-BR",
                 passcode_hash,
                 int(sports_music_buffer_min),
                 now_iso,

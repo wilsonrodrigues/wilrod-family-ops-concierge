@@ -95,7 +95,6 @@ class FamilyMemberInput(BaseModel):
     name: str = Field(..., min_length=2, max_length=60, description="Display name of the family member.")
     role: MemberRole = Field(default="Parent", description="Household role: Parent, Teen, Child, or Relative.")
     avatar: str = Field(default="🙂", max_length=8, description="Single emoji avatar representing the member.")
-    routine_notes: str = Field(default="", max_length=240, description="Activities, buffers, or routine notes.")
 
 
 class EventListFilterInput(BaseModel):
@@ -476,10 +475,6 @@ def upsert_family_member(
     name: Annotated[str, Field(description="Display name of the family member.", min_length=2)],
     role: Annotated[MemberRole, Field(description="Role in household: Parent, Teen, Child, or Relative.")] = "Parent",
     avatar: Annotated[str, Field(description="Emoji icon for this member, e.g. '⚽' or '🎸'.")] = "🙂",
-    routine_notes: Annotated[
-        str,
-        Field(description="Recurring activities or constraints (e.g. 'Band rehearsal, soccer')."),
-    ] = "",
     tool_context: Optional[ToolContext] = None,
 ) -> dict[str, Any]:
     """Adds or updates a family member in the shared household configuration.
@@ -488,7 +483,6 @@ def upsert_family_member(
         name: Display name of the family member.
         role: Household role (`Parent`, `Teen`, `Child`, or `Relative`).
         avatar: Emoji avatar shown on the member switcher.
-        routine_notes: Personal activity or scheduling preferences for this member.
         tool_context: ADK runtime context.
 
     Returns:
@@ -496,7 +490,7 @@ def upsert_family_member(
         `GuidedToolErrorOutput` dictionary with `recovery_hint`.
     """
     try:
-        validated = FamilyMemberInput(name=name, role=role, avatar=avatar, routine_notes=routine_notes)
+        validated = FamilyMemberInput(name=name, role=role, avatar=avatar)
     except ValidationError as exc:
         return _guided_error(
             error_code="INVALID_MEMBER_INPUT",
@@ -510,7 +504,7 @@ def upsert_family_member(
         role=validated.role,
         avatar=validated.avatar,
         color=palette.get(validated.role, "#1b6b5a"),
-        routine_notes=validated.routine_notes,
+        routine_notes="",
     )
     return MemberUpsertOutput(member=FamilyMemberRecordSchema.model_validate(saved)).model_dump()
 

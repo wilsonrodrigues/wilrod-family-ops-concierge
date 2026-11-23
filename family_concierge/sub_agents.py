@@ -62,7 +62,7 @@ Synthesize a practical, conflict-free family plan that:
 3. Prioritizes urgent `NEED_TO_DO` errands first, then fits `WANT_TO_DO` wish-list outings into open windows.
 4. Proposes concrete time slots with exact dates (`YYYY-MM-DD - Weekday`) and mandatory bracketed
    prefixes (`[Member]` or `[All]`) without inventing locations.
-5. Replies in the same language as the user's request (English by default, or Portuguese if requested)."""
+5. Replies in Brazilian Portuguese (`pt-BR`) by default, or in English when the user's request is in English."""
 
 
 def _conflict_advisor_instruction(_ctx: ReadonlyContext) -> str:
