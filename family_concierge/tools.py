@@ -82,6 +82,19 @@ _PLACEHOLDER_LOCATIONS = {
 # ============================================================================
 
 
+class SaveLocationInput(BaseModel):
+    """Strict input schema for persisting the household's base city or neighborhood on demand."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    location_name: str = Field(
+        ...,
+        min_length=2,
+        max_length=140,
+        description="City, neighborhood, or region name (e.g. 'Campinas, SP' or 'Pinheiros, São Paulo - SP').",
+    )
+
+
 class HouseholdProfileQueryInput(BaseModel):
     """Strict empty/query input schema for retrieving household profile."""
 
@@ -185,9 +198,19 @@ class HouseholdSettingsSchema(BaseModel):
     timezone: str
     preferred_language: str
     sports_music_buffer_min: int
+    default_location: str = ""
     is_configured: bool
     has_passcode: bool
     updated_at: str
+
+
+class SaveLocationOutput(BaseModel):
+    """Strict output schema for `save_family_location`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    default_location: str
 
 
 class FamilyMemberRecordSchema(BaseModel):
@@ -993,6 +1016,53 @@ def upsert_family_action_item(
     ).model_dump()
 
 
+def save_family_location(
+    location_name: Annotated[
+        str,
+        Field(
+            description=(
+                "City, neighborhood, or region name provided by the user or resolved from coordinates "
+                "(e.g. 'Campinas, SP' or 'Pinheiros, São Paulo - SP')."
+            ),
+            min_length=2,
+        ),
+    ],
+    tool_context: Optional[ToolContext] = None,
+) -> dict[str, Any]:
+    """Saves the household's default city or neighborhood once requested on demand for local searches.
+
+    Call this tool whenever the user tells you their city/neighborhood (or when you resolve raw
+    browser coordinates into a human-readable city/neighborhood) so future 'near me' queries work
+    automatically without asking again.
+
+    Args:
+        location_name: Human-readable city, neighborhood, or region (e.g. `'Campinas, SP'`).
+        tool_context: ADK runtime context.
+
+    Returns:
+        A validated `SaveLocationOutput` dictionary with `status` and `default_location`, or
+        `GuidedToolErrorOutput` with `recovery_hint` if the location string is empty or invalid.
+    """
+    del tool_context
+    cleaned = sanitize_location(location_name)
+    if len(cleaned) < 2:
+        return _guided_error(
+            error_code="INVALID_LOCATION_NAME",
+            message="Provided location_name is empty or a placeholder.",
+            recovery_hint="Ask the user for a real city or neighborhood name (e.g. 'Campinas, SP') before calling save_family_location.",
+        )
+    try:
+        validated = SaveLocationInput(location_name=cleaned)
+    except ValidationError as exc:
+        return _guided_error(
+            error_code="INVALID_LOCATION_NAME",
+            message=f"Invalid location_name: {exc}",
+            recovery_hint="Provide a concise city or neighborhood string between 2 and 140 characters.",
+        )
+    saved_loc = store.save_household_location(validated.location_name)
+    return SaveLocationOutput(default_location=saved_loc).model_dump()
+
+
 # Registry of compiled Input & Output JSON Schemas across all tools for static & runtime inspection
 TOOL_INPUT_OUTPUT_JSON_SCHEMAS: dict[str, dict[str, Any]] = {
     "get_family_household_profile": {
@@ -1028,6 +1098,11 @@ TOOL_INPUT_OUTPUT_JSON_SCHEMAS: dict[str, dict[str, Any]] = {
     "upsert_family_action_item": {
         "input_schema": ActionItemInput.model_json_schema(),
         "output_schema": ActionItemUpsertOutput.model_json_schema(),
+        "error_schema": GuidedToolErrorOutput.model_json_schema(),
+    },
+    "save_family_location": {
+        "input_schema": SaveLocationInput.model_json_schema(),
+        "output_schema": SaveLocationOutput.model_json_schema(),
         "error_schema": GuidedToolErrorOutput.model_json_schema(),
     },
 }
@@ -1147,4 +1222,5 @@ FAMILY_CONCIERGE_TOOLS = [
     ),
     FunctionTool(list_family_action_items),
     FunctionTool(upsert_family_action_item),
+    FunctionTool(save_family_location),
 ]

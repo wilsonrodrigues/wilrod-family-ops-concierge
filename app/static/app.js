@@ -2,6 +2,7 @@
   const PASSCODE_KEY = "family_ops_passcode";
   const MEMBER_TOKEN_KEY = "family_ops_member_token";
   const SESSION_KEY_PREFIX = "family_ops_chat_session_id";
+  const DEVICE_LOCATION_KEY = "family_ops_device_location";
 
   const initialUrlParams = new URLSearchParams(window.location.search);
   const initialUrlMemberToken = (initialUrlParams.get("m") || "").trim();
@@ -52,6 +53,51 @@
 
   function getStoredPasscode() {
     return localStorage.getItem(PASSCODE_KEY) || "";
+  }
+
+  function getCachedDeviceLocation() {
+    try {
+      const raw = localStorage.getItem(DEVICE_LOCATION_KEY);
+      if (!raw) return "";
+      const parsed = JSON.parse(raw);
+      if (!parsed || !parsed.coordsText || !parsed.ts) return "";
+      if (Date.now() - Number(parsed.ts) > 6 * 3600 * 1000) return "";
+      return String(parsed.coordsText);
+    } catch (_err) {
+      return "";
+    }
+  }
+
+  function messageNeedsNearMeLocation(text) {
+    return /\b(perto\s+de\s+mim|perto\s+daqui|aqui\s+perto|por\s+aqui|pr[óo]ximo\s+(?:a|de)\s+mim|na\s+minha\s+regi[ãa]o|na\s+minha\s+cidade|onde\s+estou|near\s+me|nearby)\b/i.test(
+      String(text || "")
+    );
+  }
+
+  function requestDeviceGeolocationOnce() {
+    if (!navigator.geolocation || typeof navigator.geolocation.getCurrentPosition !== "function") {
+      return Promise.resolve("");
+    }
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = Number(pos.coords.latitude).toFixed(4);
+          const lng = Number(pos.coords.longitude).toFixed(4);
+          const coordsText = `lat=${lat}, lng=${lng}`;
+          try {
+            localStorage.setItem(
+              DEVICE_LOCATION_KEY,
+              JSON.stringify({ coordsText, ts: Date.now() })
+            );
+          } catch (_err) {
+            // Ignore storage quota errors
+          }
+          resolve(coordsText);
+        },
+        () => resolve(""),
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 1800000 }
+      );
+    });
   }
 
   function getActiveMemberToken() {
@@ -1503,6 +1549,7 @@
         await apiFetch("/api/household/reset", { method: "POST" });
         localStorage.removeItem(PASSCODE_KEY);
         localStorage.removeItem(MEMBER_TOKEN_KEY);
+        localStorage.removeItem(DEVICE_LOCATION_KEY);
         appState.messagesBySession = {};
         appState.chatSessions = [];
         appState.sessionId = `fam-session-${Math.random().toString(36).slice(2, 8)}`;
@@ -1841,6 +1888,14 @@
   function inferSmartReplyChips(cleanText, extractedQuestion) {
     const combined = `${cleanText}\n${extractedQuestion || ""}`;
     const chips = [];
+
+    // 0. On-demand city / location prompt
+    if (/\b(qual\s+(?:sua\s+|a\s+sua\s+)?cidade|cidade\s+ou\s+bairro|sua\s+localiza[çc][ãa]o|which\s+city|your\s+location)\b/i.test(combined)) {
+      return [
+        { label: "📍 Usar minha localização", useGeolocation: true },
+        { label: "✏️ Digitar cidade/bairro...", prefill: "" },
+      ];
+    }
 
     // 1. Participant selection question
     if (
@@ -2245,7 +2300,26 @@
           chipBtn.className = "smart-reply-chip";
           chipBtn.disabled = busy;
           chipBtn.textContent = item.label;
-          chipBtn.addEventListener("click", () => {
+          chipBtn.addEventListener("click", async () => {
+            if (
+              item.useGeolocation ||
+              item.label.includes("📍") ||
+              /usar\s+(?:minha\s+)?localiza[çc][ãa]o/i.test(item.label)
+            ) {
+              chipBtn.disabled = true;
+              const coords = await requestDeviceGeolocationOnce();
+              if (coords) {
+                await sendChatMessage("Use minha localização atual para buscar opções perto de mim.", [], coords);
+              } else {
+                chipBtn.disabled = false;
+                const inputEl = document.getElementById("chat-input");
+                if (inputEl) {
+                  inputEl.placeholder = "Digite sua cidade ou bairro (ex.: Campinas, SP)";
+                  inputEl.focus();
+                }
+              }
+              return;
+            }
             if (typeof item.prefill === "string") {
               const inputEl = document.getElementById("chat-input");
               if (inputEl) {
@@ -2376,7 +2450,7 @@
     }
   }
 
-  async function sendChatMessage(text, stagedAttachments = []) {
+  async function sendChatMessage(text, stagedAttachments = [], explicitUserLocation = "") {
     clearBanner("chat-feedback");
     const targetSessionId = appState.sessionId;
     if (inflightBySession.has(targetSessionId)) {
@@ -2420,11 +2494,19 @@
     }
 
     const controller = new AbortController();
+    let resolvedLocation = explicitUserLocation || getCachedDeviceLocation() || "";
+    const needsFirstTimeGps =
+      !resolvedLocation &&
+      !(appState.household && appState.household.default_location) &&
+      messageNeedsNearMeLocation(text);
+
     inflightBySession.set(targetSessionId, {
       controller,
-      statusText: stagedAttachments.length
+      statusText: needsFirstTimeGps
+        ? "Solicitando sua localização pela 1ª vez..."
+        : stagedAttachments.length
         ? "Lendo anexo e verificando a agenda da família..."
-        : "Verificando a agenda e as listas da família...",
+        : "Verificando a agenda e buscando informações...",
     });
 
     renderActiveSessionMessages();
@@ -2432,6 +2514,17 @@
     syncComposerControls();
 
     try {
+      if (needsFirstTimeGps) {
+        resolvedLocation = await requestDeviceGeolocationOnce();
+        const activeInflight = inflightBySession.get(targetSessionId);
+        if (activeInflight) {
+          activeInflight.statusText = "Buscando opções perto de você...";
+          if (appState.sessionId === targetSessionId) {
+            renderActiveSessionMessages();
+          }
+        }
+      }
+
       const data = await apiFetch("/api/chat", {
         method: "POST",
         signal: controller.signal,
@@ -2446,6 +2539,7 @@
           member_name: active.name,
           member_avatar: "",
           session_id: targetSessionId,
+          user_location: resolvedLocation || null,
         }),
       });
 

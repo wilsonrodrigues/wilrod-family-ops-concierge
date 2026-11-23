@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from google.adk.agents import Agent, ParallelAgent, SequentialAgent
 from google.adk.agents.readonly_context import ReadonlyContext
-from google.adk.tools import FunctionTool
+from google.adk.tools import FunctionTool, google_search
 from google.adk.tools.agent_tool import AgentTool
 
+from . import store
 from .model_router import TaskComplexityTier, get_model_for_tier
 from .time_context import build_temporal_anchor_xml
 from .tools import (
@@ -167,3 +168,45 @@ schedule_conflict_advisor_pro = Agent(
         FunctionTool(list_family_calendar_events),
     ],
 )
+
+
+# ---------------------------------------------------------------------------
+# Live Google Search Grounding Specialist (`AgentTool` isolating `google_search`)
+# ---------------------------------------------------------------------------
+
+
+def _google_search_specialist_instruction(ctx: ReadonlyContext) -> str:
+    loc_from_state = str(ctx.state.get("effective_user_location") or "").strip() if ctx and ctx.state else ""
+    if not loc_from_state:
+        try:
+            loc_from_state = str(store.get_household_bundle()["household"].get("default_location") or "").strip()
+        except Exception:  # noqa: BLE001
+            loc_from_state = ""
+    loc_line = f"USER / HOUSEHOLD LOCATION CONTEXT: {loc_from_state}" if loc_from_state else "USER / HOUSEHOLD LOCATION CONTEXT: (none provided)"
+    return f"""{build_temporal_anchor_xml()}
+{loc_line}
+
+You are the Live Google Search Grounding Specialist for Family Ops Concierge.
+Use `google_search` to answer real-world factual queries and discover real activities/events:
+1. Anchor strictly on TODAY'S EXACT LOCAL DATE & TIMEZONE above (`America/Sao_Paulo` / BRT unless another timezone applies).
+2. For sports matches (e.g. soccer games like Corinthians, Palmeiras, São Paulo, Seleção):
+   - Verify whether there is an official match ON TODAY'S EXACT DATE (`YYYY-MM-DD`).
+   - State clearly: (a) YES/NO for today, (b) exact date (`DD/MM/YYYY`), kickoff time in Brasília (`HH:MM`), opponent, competition, stadium/venue, and TV/streaming broadcast if available; if there is NO match today, also report the date and time of the NEXT scheduled match!
+3. For movies in theaters, concerts, exhibitions, kids' outings, restaurants, or local events:
+   - Search current listings for the requested city/neighborhood (or resolve coordinates `lat=..., lng=...` to their city/neighborhood in Brazil and search events happening there today / this week / this weekend).
+   - Return 3 to 5 real, concrete options with name, venue/cinema, dates/times if listed, and a short 1-line description (plus the resolved city/neighborhood name if coordinates were passed).
+4. Never fabricate matches, showtimes, or venues. Keep your summary factual, structured, and concise using regular `-` hyphens."""
+
+
+google_search_specialist = Agent(
+    name="google_search_specialist",
+    model=get_model_for_tier(TaskComplexityTier.MULTIMODAL_COORDINATOR),
+    description=(
+        "Searches live Google Search for sports match schedules/times, movies currently in theaters, "
+        "local events, concerts, family outings, weather, holidays, and real-world facts."
+    ),
+    instruction=_google_search_specialist_instruction,
+    tools=[google_search],
+)
+
+google_search_specialist_tool = AgentTool(agent=google_search_specialist)

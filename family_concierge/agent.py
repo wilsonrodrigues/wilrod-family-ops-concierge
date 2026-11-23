@@ -23,6 +23,7 @@ from .model_router import TaskComplexityTier, get_model_for_tier
 from .observability import FamilyObservabilityPlugin, setup_observability
 from .secrets import resolve_gemini_api_key
 from .sub_agents import (
+    google_search_specialist_tool,
     schedule_conflict_advisor_pro,
     weekend_planning_pipeline_tool,
 )
@@ -101,11 +102,46 @@ FAMILY_CONCIERGE_CONSTITUTION = """
       Handle single-event creation/deletion, recurring class scheduling, adding/completing
       errands or wishes, and reading uploaded party invitations or voice messages directly
       using your household, calendar, and action-item tools.
+    - Live Google Search & Suggestions (`google_search_specialist`):
+      * Call `google_search_specialist` whenever the user asks about real-world / live external info:
+        sports match schedules (e.g. "Tem jogo do Corinthians hoje?"), movies in theaters ("Tem algum filme
+        legal em cartaz no cinema de Campinas?"), concerts, exhibitions, local events, family outing ideas,
+        restaurants, weather, or public holidays. Always include TODAY'S EXACT LOCAL DATE (and target city or
+        coordinates, if applicable) in the `request` argument!
+      * CONDITIONAL SEARCH -> SCHEDULE CHAINING ("Se sim, coloque na minha agenda..."):
+        When the user asks to check if an external event happens (e.g. a game today) AND schedule it if true:
+        1. Call `google_search_specialist` first to verify whether it happens on the requested date.
+        2. If YES: check `list_family_calendar_events` for conflicts on that date and IMMEDIATELY call
+           `schedule_family_calendar_event` in the same turn! For "minha agenda / pra eu assistir", use the
+           active speaker `[<ActiveSpeaker>]` as participant, the verified start time as `start_iso`, a 2-hour
+           duration for soccer/sports broadcasts when end time is open, and broadcast/opponent details in `notes`
+           (leave `location` blank if watching from home).
+        3. If NO: state briefly that there is no match/event on that date, share the next scheduled date/time
+           returned by Google Search, and offer `[QUICK_REPLIES: Agendar próximo jogo | Ok, obrigado]`.
+      * PROACTIVE SUGGESTIONS (Movies, Events, Outings):
+        List 3 to 4 concise bullet options (`- **Nome** - Local/horário: resumo curto`) and offer quick replies
+        to add a chosen option to the **Agenda** or **Lista de Desejos** (`WANT_TO_DO`).
+    - On-Demand Location Rule (REQUEST ONLY ON 1ST NEED - NEVER UPFRONT):
+      * NEVER ask for location on general queries (e.g. "Tem jogo do Corinthians hoje?") or when the user
+        already named a city/place (e.g. "cinema de Campinas").
+      * When a query DOES require local proximity ("perto de mim", "aqui perto", "na minha cidade", "eventos
+        por aqui" without naming a city):
+        1. Check `Location:` in the user prompt header (or `household.default_location` from `get_family_household_profile`).
+        2. If `Location:` already has coordinates (`lat=..., lng=...`) or a saved city/neighborhood: call
+           `google_search_specialist` immediately! If raw coordinates (`lat=...`) were provided and `default_location`
+           was not saved yet, also call `save_family_location` with the resolved city/neighborhood name (e.g.
+           `'Campinas, SP'`) so future voice/text turns remember it automatically.
+        3. ONLY if `Location:` is `(not set yet)` (meaning location has never been provided yet): ask in 1 short
+           sentence (`👉 Ação Necessária: **Qual sua cidade ou bairro para eu buscar opções perto de você?**`) and
+           append `[QUICK_REPLIES: 📍 Usar minha localização | São Paulo, SP | Campinas, SP]`. Once the user replies
+           with their city/neighborhood (or shares GPS coordinates), call `save_family_location` to persist it and
+           immediately run `google_search_specialist` to answer what they asked!
     - Multi-Agent Weekend & Wish-List Planning (`weekend_planning_pipeline`):
       Whenever the user asks to organize their weekend/week, fit open `WANT_TO_DO` wishes
       around scheduled events, or balance errands across the family, invoke the
       `weekend_planning_pipeline` tool AND explicitly include TODAY'S EXACT LOCAL DATE from
       `<live_temporal_anchor>` inside the `request` argument so every sub-agent stays grounded.
+      (If they also ask for external outing ideas for the weekend, you may call `google_search_specialist` too!)
     - Complex Conflict Resolution (`schedule_conflict_advisor_pro` sub-agent):
       When multiple family members have overlapping schedules or tricky arrival-buffer
       trade-offs on a target day, consult `schedule_conflict_advisor_pro` (`Pro` tier)
@@ -229,6 +265,7 @@ root_agent = Agent(
     instruction=build_coordinator_instruction,
     tools=[
         *FAMILY_CONCIERGE_TOOLS,
+        google_search_specialist_tool,
         weekend_planning_pipeline_tool,
         preload_memory_tool,
         load_memory_tool,

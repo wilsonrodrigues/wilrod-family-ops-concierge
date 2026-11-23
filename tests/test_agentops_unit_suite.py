@@ -71,7 +71,7 @@ def test_tool_interface_design_and_strict_schemas(isolated_household_env: Path) 
         upsert_family_action_item,
     )
 
-    assert len(FAMILY_CONCIERGE_TOOLS) == 7
+    assert len(FAMILY_CONCIERGE_TOOLS) == 8
     for ft in FAMILY_CONCIERGE_TOOLS:
         assert ft.name in TOOL_INPUT_OUTPUT_JSON_SCHEMAS
         assert ft.description and len(ft.description) >= 40
@@ -919,3 +919,33 @@ def test_same_location_buffer_exception_first_date_and_cloud_run_persistence(
         local_date_ymd=today_ymd,
         tz_name="America/Sao_Paulo",
     ) is False
+
+
+def test_google_search_specialist_and_on_demand_family_location(
+    isolated_household_env: Path,
+) -> None:
+    """Verifies `google_search_specialist` registration on `root_agent` and persistent on-demand `save_family_location`."""
+    del isolated_household_env
+    from family_concierge import store
+    from family_concierge.agent import root_agent
+    from family_concierge.sub_agents import google_search_specialist
+    from family_concierge.tools import get_family_household_profile, save_family_location
+
+    tool_names = [t.name for t in root_agent.tools]
+    assert "google_search_specialist" in tool_names
+    assert "save_family_location" in tool_names
+    assert any(getattr(t, "name", "") == "google_search" for t in google_search_specialist.tools)
+
+    # Starts empty until requested on first proximity query
+    initial_profile = get_family_household_profile()
+    assert initial_profile["household"]["default_location"] == ""
+
+    # Rejects placeholder/empty locations with GuidedToolErrorOutput
+    bad_loc = save_family_location("TBD")
+    assert bad_loc["status"] == "error"
+    assert bad_loc["error_code"] == "INVALID_LOCATION_NAME"
+
+    # Saves real city/neighborhood permanently across refreshes
+    saved_loc = save_family_location("Campinas, SP")
+    assert saved_loc == {"status": "success", "default_location": "Campinas, SP"}
+    assert store.get_household_bundle()["household"]["default_location"] == "Campinas, SP"

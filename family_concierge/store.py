@@ -279,6 +279,7 @@ def init_db() -> None:
                 preferred_language TEXT NOT NULL DEFAULT 'pt-BR',
                 passcode_hash TEXT NOT NULL DEFAULT '',
                 sports_music_buffer_min INTEGER NOT NULL DEFAULT 30,
+                default_location TEXT NOT NULL DEFAULT '',
                 is_configured INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL
             );
@@ -393,6 +394,8 @@ def init_db() -> None:
         }
         if "admin_member_id" not in hh_cols:
             conn.execute("ALTER TABLE household_config ADD COLUMN admin_member_id TEXT NOT NULL DEFAULT ''")
+        if "default_location" not in hh_cols:
+            conn.execute("ALTER TABLE household_config ADD COLUMN default_location TEXT NOT NULL DEFAULT ''")
 
         member_cols = {
             r["name"] for r in conn.execute("PRAGMA table_info(family_members)").fetchall()
@@ -553,6 +556,7 @@ def reset_household_to_new_user() -> dict[str, Any]:
                 preferred_language = 'pt-BR',
                 passcode_hash = '',
                 admin_member_id = '',
+                default_location = '',
                 sports_music_buffer_min = 30,
                 is_configured = 0,
                 updated_at = ?
@@ -586,7 +590,21 @@ def get_household_bundle(include_admin_secrets: bool = False) -> dict[str, Any]:
     else:
         if not cfg.get("admin_member_id") and raw_members:
             cfg["admin_member_id"] = raw_members[0]["member_id"]
+    cfg["default_location"] = str(cfg.get("default_location") or "")
     return {"household": cfg, "members": raw_members}
+
+
+def save_household_location(location_text: str) -> str:
+    """Persists the household's base city/neighborhood (`default_location`) requested on first proximity query."""
+    init_db()
+    cleaned = " ".join((location_text or "").strip().split())[:140]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE household_config SET default_location = ?, updated_at = ? WHERE id = 1",
+            (cleaned, now_iso),
+        )
+    return cleaned
 
 
 def get_household_auth_meta() -> dict[str, Any]:

@@ -86,7 +86,7 @@ def _get_session_lock(session_id: str) -> asyncio.Lock:
 app = FastAPI(
     title="Family Ops Concierge",
     description="Shared Family Calendar, Multimodal Voice & Invitation Intake, Errands, Wishes, and ADK Concierge.",
-    version="0.9.4",
+    version="0.10.0",
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -245,6 +245,7 @@ class ChatRequestPayload(BaseModel):
     member_name: str = Field(default="Family")
     member_avatar: str = Field(default="🙂")
     session_id: str = Field(default="shared-household-session")
+    user_location: Optional[str] = Field(default=None, max_length=160)
 
 
 class ChatConfirmationPayload(BaseModel):
@@ -1012,9 +1013,18 @@ async def chat_with_concierge(
         if already_replied_today
         else "First Reply Today: YES (mention today's date at most once only if helpful)"
     )
+    saved_default_loc = str(bundle["household"].get("default_location") or "").strip()
+    incoming_device_loc = str(payload.user_location or "").strip()
+    effective_location = incoming_device_loc or saved_default_loc
+    location_directive = (
+        f"Location: {effective_location}"
+        if effective_location
+        else "Location: (not set yet - ask ONLY if the user's request requires 'near me' local proximity)"
+    )
     contextual_prompt = (
         f"[Active Family Member: {effective_member_name} | "
         f"Current Local Date: {now_local.strftime('%Y-%m-%d (%A) %H:%M')} | "
+        f"{location_directive} | "
         f"{date_directive}]\n"
         f"{user_text}"
     )
@@ -1043,6 +1053,7 @@ async def chat_with_concierge(
                     "active_member_id": effective_member_id,
                     "routed_tier": route_hint.tier.value,
                     "already_replied_today": already_replied_today,
+                    "effective_user_location": effective_location,
                 },
                 include_admin_secrets=(auth.access_mode == "admin"),
                 speaker_filter=auth.speaker_filter,
