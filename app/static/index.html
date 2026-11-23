@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=0.9.0" />
+  <link rel="stylesheet" href="/static/styles.css?v=0.9.1" />
 </head>
 <body>
   <div class="app-shell">
@@ -201,7 +201,6 @@
             <div class="chat-topbar">
               <div class="chat-topbar-titles">
                 <h2 id="active-chat-title">Concierge IA</h2>
-                <span class="chat-speaker-chip" id="chat-speaker-indicator"></span>
               </div>
               <div class="chat-topbar-actions">
                 <button type="button" class="icon-only-header-btn mobile-only-btn" id="btn-mobile-history" title="Histórico de conversas" aria-label="Histórico de conversas" aria-expanded="false">
@@ -305,10 +304,6 @@
                 <label for="cfg-timezone">Fuso Horário</label>
                 <input type="text" id="cfg-timezone" value="America/Sao_Paulo" />
               </div>
-              <div class="field-group">
-                <label for="cfg-buffer">Antecedência p/ Esportes e Música (min)</label>
-                <input type="number" id="cfg-buffer" min="0" max="120" value="30" />
-              </div>
             </div>
 
             <div class="section-header">
@@ -379,6 +374,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.9.0"></script>
+  <script src="/static/app.js?v=0.9.1"></script>
 </body>
 </html>

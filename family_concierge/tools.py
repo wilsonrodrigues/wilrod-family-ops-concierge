@@ -4,6 +4,7 @@ import calendar
 from datetime import datetime, timedelta
 import re
 from typing import Annotated, Any, Literal, Optional
+import unicodedata
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -408,6 +409,31 @@ def sanitize_location(raw_location: Optional[str]) -> str:
     return cleaned
 
 
+def _normalize_location_for_match(raw_location: Optional[str]) -> str:
+    """Normalizes a venue/location string (accent-free, lowercase, alphanumeric tokens) for same-venue checks."""
+    cleaned = sanitize_location(raw_location)
+    if not cleaned:
+        return ""
+    decomposed = unicodedata.normalize("NFKD", cleaned)
+    ascii_str = "".join(ch for ch in decomposed if not unicodedata.combining(ch)).lower()
+    tokens = re.sub(r"[^a-z0-9]+", " ", ascii_str).strip()
+    return " ".join(tokens.split())
+
+
+def locations_are_same(loc_a: Optional[str], loc_b: Optional[str]) -> bool:
+    """Returns True when two non-empty event locations refer to the same venue (skipping travel/arrival buffers)."""
+    norm_a = _normalize_location_for_match(loc_a)
+    norm_b = _normalize_location_for_match(loc_b)
+    if len(norm_a) < 2 or len(norm_b) < 2:
+        return False
+    if norm_a == norm_b:
+        return True
+    shorter, longer = (norm_a, norm_b) if len(norm_a) <= len(norm_b) else (norm_b, norm_a)
+    if len(shorter) >= 5 and re.search(rf"\b{re.escape(shorter)}\b", longer):
+        return True
+    return False
+
+
 def _advance_datetime(base_dt: datetime, recurrence: RecurrencePattern, index: int) -> datetime:
     """Computes occurrence timestamp `index` steps forward from `base_dt`."""
     if index == 0 or recurrence == "NONE":
@@ -711,6 +737,7 @@ def schedule_family_calendar_event(
         end_iso=validated.end_iso,
         participants=normalized_participants,
         title=bracketed_title,
+        location=cleaned_location,
         recurrence=validated.recurrence,
         occurrences=total_count,
     )
@@ -1011,10 +1038,11 @@ def find_calendar_overlaps(
     end_iso: str,
     participants: str = "All",
     title: str = "",
+    location: Optional[str] = None,
     recurrence: str = "NONE",
     occurrences: int = 1,
 ) -> list[str]:
-    """Detects direct schedule overlaps and 30-min arrival-buffer overlaps ONLY for the same family member, ignoring full-day events."""
+    """Detects direct schedule overlaps and 30-min arrival-buffer overlaps ONLY for the same family member, ignoring full-day events and skipping arrival-buffer warnings when both events share the same location."""
     try:
         first_start = datetime.fromisoformat(start_iso)
         first_end = datetime.fromisoformat(end_iso)
@@ -1028,6 +1056,7 @@ def find_calendar_overlaps(
     household = store.get_household_bundle()["household"]
     configured_buffer = int(household.get("sports_music_buffer_min", 30))
     buffer_minutes = infer_arrival_buffer_minutes(title, configured_buffer, is_all_day=False)
+    cleaned_new_location = sanitize_location(location)
     duration = first_end - first_start
     rec_mode: RecurrencePattern = recurrence if recurrence in ("NONE", "DAILY", "WEEKLY", "BIWEEKLY", "MONTHLY") else "NONE"  # type: ignore[assignment]
     total_count = 1 if rec_mode == "NONE" else max(1, min(int(occurrences or 1), 60))
@@ -1052,13 +1081,14 @@ def find_calendar_overlaps(
                 continue
 
             ex_buf_start = datetime.fromisoformat(existing.get("buffer_start_iso", existing["start_iso"]))
+            same_venue = locations_are_same(cleaned_new_location, existing.get("location"))
 
             if occ_start < ex_end and occ_end > ex_raw_start:
                 warnings.append(
                     f"Direct time overlap on {day_key} ({occ_start.strftime('%H:%M')}-{occ_end.strftime('%H:%M')}) "
                     f"with '{existing['title']}' ({ex_raw_start.strftime('%H:%M')}-{ex_end.strftime('%H:%M')})"
                 )
-            elif occ_effective_start < ex_end and occ_end > ex_buf_start:
+            elif not same_venue and occ_effective_start < ex_end and occ_end > ex_buf_start:
                 warnings.append(
                     f"{configured_buffer}-min arrival-buffer overlap on {day_key} "
                     f"(buffer window {occ_effective_start.strftime('%H:%M')}-{occ_end.strftime('%H:%M')}) "
@@ -1077,6 +1107,7 @@ def should_confirm_schedule_event(
     start_iso: str = "",
     end_iso: str = "",
     participants: str = "All",
+    location: Optional[str] = None,
     recurrence: RecurrencePattern = "NONE",
     occurrences: int = 1,
     allow_overlap: bool = False,
@@ -1093,6 +1124,7 @@ def should_confirm_schedule_event(
             end_iso=end_iso,
             participants=participants,
             title=title,
+            location=location,
             recurrence=recurrence,
             occurrences=total_count,
         )

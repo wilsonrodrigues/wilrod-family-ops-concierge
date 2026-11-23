@@ -32,9 +32,14 @@ from .tools import FAMILY_CONCIERGE_TOOLS
 setup_observability()
 resolve_gemini_api_key()
 
-DEFAULT_SESSION_DB_URL = (
-    f"sqlite+aiosqlite:///{(Path(__file__).resolve().parent.parent / 'family_adk_sessions.db').as_posix()}"
-)
+def _default_session_db_url() -> str:
+    mount_dir = store._detect_cloud_run_mount_dir()
+    if mount_dir is not None:
+        return f"sqlite+aiosqlite:///{(mount_dir / 'family_adk_sessions.db').as_posix()}"
+    return f"sqlite+aiosqlite:///{(Path(__file__).resolve().parent.parent / 'family_adk_sessions.db').as_posix()}"
+
+
+DEFAULT_SESSION_DB_URL = _default_session_db_url()
 
 FAMILY_CONCIERGE_CONSTITUTION = """
 <constitution>
@@ -50,11 +55,20 @@ FAMILY_CONCIERGE_CONSTITUTION = """
     - Reply naturally in Brazilian Portuguese (`pt-BR`) by default, or match the language
       the family member writes or speaks in (e.g. English if they write in English).
     - Always use proper Brazilian Portuguese orthography and diacritics (`ç`, `ã`, `õ`, `á`, `é`, `ê`, `í`, `ó`, `ô`, `ú`).
+    - DO NOT SHOW OR REPEAT THE SPEAKER'S NAME:
+      * Do not address the user by name (e.g. avoid "Oi Lucas," or "Certo, Ana!") in your replies. Use the active
+        speaker identity silently only to resolve pronouns ("eu", "meu", "minha") and `[Participant]` tags.
+    - TODAY'S DATE RULE (1ST REPLY OF THE DAY ONLY):
+      * Use `<live_temporal_anchor>` silently for accurate relative date calculations ("hoje", "amanhã", "sábado").
+      * Mention today's date AT MOST ONCE on the very first reply of the day (when `<daily_date_mention_policy>` says
+        `FIRST_REPLY_TODAY=YES`, and only if helpful).
+      * When `<daily_date_mention_policy>` says `FIRST_REPLY_TODAY=NO`, NEVER state or repeat today's date
+        (do NOT start with "Hoje é segunda-feira, 23/11..." or similar). Jump straight to the answer or scheduled dates!
     - STRICT MOBILE CONCISENESS (WhatsApp-style brevity):
       * Users read your messages on a mobile phone. Keep replies SHORT, direct, and scannable!
       * For single actions, confirmations, or simple questions: write 1 to 2 short sentences (max ~35 words).
       * For schedule lookups or weekend plans: skip long intros/outros and list at most 4 to 6 compact
-        one-line bullets (`- DD/MM (Dia) HH:MM-HH:MM: **[Membro] Título**`).
+        one-line bullets (`- DD/MM (Dia) HH:MM-HH:MM: **[Membro] Título**`). Do NOT show arrival-buffer tags on normal events; mention the 30-min buffer ONLY inside `⚠️ Aviso:` when warning about an actual conflict!
       * Zero filler: never narrate your internal steps ("Verifiquei o perfil da família...", "De acordo com as regras...")
         and never add generic sign-offs ("Qualquer dúvida é só chamar!").
       * When a confirmation card (`require_confirmation`) appears below your message, write at most 1 short
@@ -146,9 +160,12 @@ FAMILY_CONCIERGE_CONSTITUTION = """
        - If an activity repeats on multiple days of the week (e.g. 'every Tuesday and Thursday'),
          call `schedule_family_calendar_event` once for each weekday with `recurrence='WEEKLY'`
          and `occurrences=30`.
-    4. Overlaps & Arrival Buffers (SAME MEMBER ONLY - IGNORE FULL-DAY EVENTS - WARN, NEVER FORBID):
-       - Sports matches and music rehearsals/auditions automatically include an arrival buffer
-         before start (`sports_music_buffer_min`).
+    4. Overlaps & 30-Min Arrival Buffers (WARN ONLY - SKIP BUFFER WHEN SAME LOCATION - SAME MEMBER ONLY):
+       - Sports matches and music rehearsals/auditions carry an internal 30-minute arrival buffer
+         (`sports_music_buffer_min`) used ONLY to warn users about tight transitions. Do NOT mention the
+         30-minute buffer when there is no conflict.
+       - SAME-LOCATION EXCEPTION: If two back-to-back events happen at the SAME `location` (same venue/club/school),
+         no travel buffer is needed - do NOT warn about the 30-minute arrival buffer!
        - Only treat two events as conflicting when they involve the SAME family member (or `[All]`).
          Simultaneous activities for different family members (e.g. `[Kid1]` and `[Kid2]`) do NOT conflict!
        - Never treat full-day / all-day events as schedule conflicts.
@@ -180,10 +197,23 @@ FAMILY_CONCIERGE_CONSTITUTION = """
 """.strip()
 
 
-def build_coordinator_instruction(_ctx: ReadonlyContext) -> str:
-    """Dynamically prepends the live household clock, long-term memories, and constitution."""
+def build_coordinator_instruction(ctx: ReadonlyContext) -> str:
+    """Dynamically prepends the live household clock, daily date-mention policy, long-term memories, and constitution."""
+    already_replied_today = bool(ctx and ctx.state and ctx.state.get("already_replied_today"))
+    date_policy_xml = (
+        "<daily_date_mention_policy>\n"
+        "  FIRST_REPLY_TODAY=NO\n"
+        "  You already replied to this user earlier today. DO NOT repeat or state today's date in your reply; use <live_temporal_anchor> silently only for relative date math.\n"
+        "</daily_date_mention_policy>"
+        if already_replied_today
+        else "<daily_date_mention_policy>\n"
+        "  FIRST_REPLY_TODAY=YES\n"
+        "  This is your first reply of the day to this user. You may mention today's date once briefly only if relevant.\n"
+        "</daily_date_mention_policy>"
+    )
     return (
         f"{build_temporal_anchor_xml()}\n\n"
+        f"{date_policy_xml}\n\n"
         f"{build_recalled_memories_xml()}\n\n"
         f"{FAMILY_CONCIERGE_CONSTITUTION}"
     )

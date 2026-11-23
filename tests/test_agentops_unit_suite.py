@@ -779,3 +779,143 @@ def test_admin_vs_member_magic_links_and_private_chats(
     assert new_token != spouse_token
     assert spouse_client.get("/api/state", headers={"X-Member-Token": spouse_token}).status_code == 401
     assert spouse_client.get("/api/state", headers={"X-Member-Token": new_token}).status_code == 200
+
+
+def test_same_location_buffer_exception_first_date_and_cloud_run_persistence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verifies same-location 30-min buffer skip, 1st-of-day date flag, and Cloud Run non-clobber persistence."""
+    gcs_mount = tmp_path / "gcs_mount"
+    gcs_mount.mkdir()
+    gcs_db = gcs_mount / "family_ops.db"
+    monkeypatch.setenv("FAMILY_OPS_DB_PATH", str(gcs_db))
+    monkeypatch.delenv("FAMILY_OPS_LOAD_SEED", raising=False)
+    monkeypatch.setenv("USE_SECRET_MANAGER", "0")
+
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from family_concierge import store, tools
+
+    # 1. Setup household on Instance A (`K_SERVICE` active -> stages in `/tmp` and syncs atomically to `gcs_db`)
+    monkeypatch.setenv("K_SERVICE", "family-ops-service")
+    store._RESTORED_RUNTIME_MAP.clear()
+    store._LAST_SYNCED_MTIME_NS.clear()
+    store._INITIALIZED_RUNTIME_PATHS.clear()
+
+    saved = store.save_household_setup(
+        household_name="Família Teste",
+        timezone_str="America/Sao_Paulo",
+        preferred_language="pt-BR",
+        sports_music_buffer_min=30,
+        members=[
+            {"member_id": "mem-1", "name": "Pai", "role": "Parent"},
+            {"member_id": "mem-2", "name": "Filho", "role": "Child"},
+        ],
+        new_passcode="4321",
+        admin_member_id="mem-1",
+    )
+    assert saved["household"]["is_configured"] is True
+    assert gcs_db.is_file() and gcs_db.stat().st_size > 0
+    assert store._sqlite_file_is_configured(gcs_db) is True
+
+    # Simulate cold-start / page refresh on a second container instance: settings MUST persist and never be clobbered
+    unconfigured_tmp = tmp_path / "cold_unconfigured.db"
+    monkeypatch.setenv("FAMILY_OPS_DB_PATH", str(unconfigured_tmp))
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    store.init_db()
+    assert store._sqlite_file_is_configured(unconfigured_tmp) is False
+
+    # Attempt to sync an unconfigured cold-start DB onto the configured GCS DB (`allow_reset=False`) -> blocked!
+    store.sync_sqlite_backup(str(unconfigured_tmp), str(gcs_db), allow_reset=False)
+    assert store._sqlite_file_is_configured(gcs_db) is True
+
+    monkeypatch.setenv("FAMILY_OPS_DB_PATH", str(gcs_db))
+    monkeypatch.setenv("K_SERVICE", "family-ops-service")
+    store._RESTORED_RUNTIME_MAP.clear()
+    store._LAST_SYNCED_MTIME_NS.clear()
+    store._INITIALIZED_RUNTIME_PATHS.clear()
+    refreshed_bundle = store.get_household_bundle()
+    assert refreshed_bundle["household"]["is_configured"] is True
+    assert refreshed_bundle["household"]["household_name"] == "Família Teste"
+    assert len(refreshed_bundle["members"]) == 2
+
+    # 2. Same-location exception for 30-min arrival buffer warnings
+    first_ev = tools.schedule_family_calendar_event(
+        title="Aula de Inglês",
+        start_iso="2099-06-15T15:00:00",
+        end_iso="2099-06-15T16:00:00",
+        participants="Filho",
+        location="Clube Pinheiros",
+        recurrence="NONE",
+    )
+    assert first_ev["status"] == "success"
+
+    # Back-to-back soccer practice at a DIFFERENT location -> triggers 30-min arrival-buffer warning
+    diff_loc = tools.schedule_family_calendar_event(
+        title="Treino de Futebol",
+        start_iso="2099-06-15T16:00:00",
+        end_iso="2099-06-15T17:00:00",
+        participants="Filho",
+        location="Arena Morumbi",
+        recurrence="NONE",
+        allow_overlap=False,
+    )
+    assert diff_loc["status"] == "error"
+    assert diff_loc["error_code"] == "OVERLAP_CONFIRMATION_REQUIRED"
+
+    # Back-to-back soccer practice at the SAME location -> ZERO buffer warning, schedules cleanly!
+    same_loc = tools.schedule_family_calendar_event(
+        title="Treino de Futebol",
+        start_iso="2099-06-15T16:00:00",
+        end_iso="2099-06-15T17:00:00",
+        participants="Filho",
+        location="clube pinheiros",
+        recurrence="NONE",
+        allow_overlap=False,
+    )
+    assert same_loc["status"] == "success"
+    assert same_loc["overlap_warnings"] == []
+
+    # Direct clock-time overlap at the SAME location STILL warns!
+    direct_same_loc = tools.schedule_family_calendar_event(
+        title="Natação",
+        start_iso="2099-06-15T16:30:00",
+        end_iso="2099-06-15T17:30:00",
+        participants="Filho",
+        location="Clube Pinheiros",
+        recurrence="NONE",
+        allow_overlap=False,
+    )
+    assert direct_same_loc["status"] == "error"
+    assert direct_same_loc["error_code"] == "OVERLAP_CONFIRMATION_REQUIRED"
+
+    # 3. First-time-of-day-only date tracking (`has_assistant_reply_on_local_date`)
+    today_ymd = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y-%m-%d")
+    assert store.has_assistant_reply_on_local_date(
+        member_name="Pai",
+        local_date_ymd=today_ymd,
+        tz_name="America/Sao_Paulo",
+    ) is False
+
+    store.ensure_chat_session("sess-today-1", first_prompt="Oi", created_by="Pai")
+    store.append_chat_message("sess-today-1", role="user", content="Oi", speaker_name="Pai")
+    assert store.has_assistant_reply_on_local_date(
+        member_name="Pai",
+        local_date_ymd=today_ymd,
+        tz_name="America/Sao_Paulo",
+        session_id="sess-today-1",
+    ) is False
+
+    store.append_chat_message("sess-today-1", role="assistant", content="Olá! Tudo certo.")
+    assert store.has_assistant_reply_on_local_date(
+        member_name="Pai",
+        local_date_ymd=today_ymd,
+        tz_name="America/Sao_Paulo",
+        session_id="sess-today-1",
+    ) is True
+    assert store.has_assistant_reply_on_local_date(
+        member_name="Filho",
+        local_date_ymd=today_ymd,
+        tz_name="America/Sao_Paulo",
+    ) is False

@@ -67,8 +67,11 @@
       },
       options.headers || {}
     );
-    const resp = await fetch(path, Object.assign({}, options, { headers }));
+    const resp = await fetch(path, Object.assign({}, options, { headers, cache: "no-store" }));
     if (resp.status === 401) {
+      if (!new URLSearchParams(window.location.search).has("m")) {
+        localStorage.removeItem(MEMBER_TOKEN_KEY);
+      }
       document.getElementById("passcode-modal").classList.add("visible");
       throw new Error("UNAUTHORIZED");
     }
@@ -249,9 +252,6 @@
       lockedPillEl.textContent = isConfigured && appState.members.length ? active.name : "";
     }
 
-    document.getElementById("chat-speaker-indicator").textContent =
-      isConfigured && appState.members.length ? active.name : "";
-
     if (!appState.selectedEventParticipants.length && active.name) {
       appState.selectedEventParticipants = [active.name];
     }
@@ -407,7 +407,6 @@
       const row = document.createElement("div");
       row.className = "event-row";
       const allDay = isEventAllDay(ev);
-      const hasBuffer = !allDay && ev.buffer_start_iso && ev.buffer_start_iso !== ev.start_iso;
       const isRecurring = ev.recurrence && ev.recurrence !== "NONE" && ev.series_id;
 
       row.innerHTML = `
@@ -417,7 +416,6 @@
               ? `<span class="all-day-badge">Dia inteiro</span>`
               : `<div>${formatTime(ev.start_iso)} - ${formatTime(ev.end_iso)}</div>`
           }
-          ${hasBuffer ? `<span class="buffer-tag">Antecedência ${formatTime(ev.buffer_start_iso)}</span>` : ""}
         </div>
         <div class="event-main-col">
           <div class="event-title">${escapeHtml(ev.title)}</div>
@@ -565,7 +563,6 @@
     }
     document.getElementById("cfg-language").value = hh.preferred_language || "pt-BR";
     document.getElementById("cfg-timezone").value = hh.timezone || "America/Sao_Paulo";
-    document.getElementById("cfg-buffer").value = hh.sports_music_buffer_min ?? 30;
     const passEl = document.getElementById("cfg-passcode");
     passEl.value = "";
     passEl.required = !hh.has_passcode;
@@ -1181,16 +1178,16 @@
               household_name: typedName,
               preferred_language: document.getElementById("cfg-language").value,
               timezone: document.getElementById("cfg-timezone").value.trim(),
-              sports_music_buffer_min: Number(document.getElementById("cfg-buffer").value || 30),
+              sports_music_buffer_min: Number((appState.household && appState.household.sports_music_buffer_min) ?? 30),
               admin_member_id: adminSel ? adminSel.value : typedMembers[0].member_id,
               new_passcode: newPass || null,
               clear_passcode: false,
               members: typedMembers,
             }),
           });
+          localStorage.removeItem(MEMBER_TOKEN_KEY);
           if (newPass) {
             localStorage.setItem(PASSCODE_KEY, newPass);
-            localStorage.removeItem(MEMBER_TOKEN_KEY);
           }
         }
         await saveGcalLinkSetting(true);
@@ -1376,16 +1373,16 @@
           household_name: document.getElementById("cfg-name").value.trim(),
           preferred_language: document.getElementById("cfg-language").value,
           timezone: document.getElementById("cfg-timezone").value.trim(),
-          sports_music_buffer_min: Number(document.getElementById("cfg-buffer").value || 30),
+          sports_music_buffer_min: Number((appState.household && appState.household.sports_music_buffer_min) ?? 30),
           admin_member_id: adminMemberId || null,
           new_passcode: newPass || null,
           clear_passcode: false,
           members,
         }),
       });
+      localStorage.removeItem(MEMBER_TOKEN_KEY);
       if (newPass) {
         localStorage.setItem(PASSCODE_KEY, newPass);
-        localStorage.removeItem(MEMBER_TOKEN_KEY);
       }
       await loadFullState();
       if (navigateAfterSave) {
@@ -1421,13 +1418,14 @@
         household_name: document.getElementById("cfg-name").value.trim() || "Nossa Família",
         preferred_language: document.getElementById("cfg-language").value,
         timezone: document.getElementById("cfg-timezone").value.trim(),
-        sports_music_buffer_min: Number(document.getElementById("cfg-buffer").value || 30),
+        sports_music_buffer_min: Number((appState.household && appState.household.sports_music_buffer_min) ?? 30),
         admin_member_id: adminSel ? adminSel.value : null,
         clear_passcode: true,
         members,
       }),
     });
     localStorage.removeItem(PASSCODE_KEY);
+    localStorage.removeItem(MEMBER_TOKEN_KEY);
     await loadFullState();
     showBanner("setup-feedback", "PIN removido.", "success");
   });
@@ -2055,8 +2053,7 @@
         bubble.appendChild(mediaWrap);
       }
       const captionDiv = document.createElement("div");
-      const prefix = msg.speaker_name ? `${msg.speaker_name}: ` : "";
-      captionDiv.textContent = `${prefix}${msg.content || ""}`;
+      captionDiv.textContent = msg.content || "";
       bubble.appendChild(captionDiv);
       return bubble;
     }
@@ -2291,7 +2288,7 @@
       (m.pending_confirmations || []).forEach((c) => {
         if (c.confirmation_call_id === confirmationCallId) {
           c.resolved = true;
-          c.resolution_label = `${confirmed ? "✓ Aprovado" : "✕ Cancelado"} por ${active.name}`;
+          c.resolution_label = confirmed ? "✓ Aprovado" : "✕ Cancelado";
         }
       });
     });

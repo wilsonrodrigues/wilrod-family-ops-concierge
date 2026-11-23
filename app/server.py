@@ -86,7 +86,7 @@ def _get_session_lock(session_id: str) -> asyncio.Lock:
 app = FastAPI(
     title="Family Ops Concierge",
     description="Shared Family Calendar, Multimodal Voice & Invitation Intake, Errands, Wishes, and ADK Concierge.",
-    version="0.9.0",
+    version="0.9.1",
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -124,15 +124,11 @@ def resolve_auth_context(
     meta = store.get_household_auth_meta()
     header_member_tok = (x_member_token or "").strip()
 
-    # 1. Explicit X-Member-Token header (personal magic link active in this tab/app)
+    # 1. Valid X-Member-Token header (personal magic link active in this tab/app)
     if header_member_tok:
         member = store.get_member_by_invite_token(header_member_tok)
         if member is not None:
             return AuthContext(access_mode="member", member=member)
-        raise HTTPException(
-            status_code=401,
-            detail="Este link de convite não é mais válido. Peça um novo link ao administrador da família.",
-        )
 
     # 2. Admin PIN header or persistent HttpOnly Admin cookie
     if meta["has_passcode"]:
@@ -149,6 +145,12 @@ def resolve_auth_context(
                 access_mode="admin",
                 member=store.get_admin_member(meta["admin_member_id"]),
             )
+
+    if header_member_tok and meta["is_configured"]:
+        raise HTTPException(
+            status_code=401,
+            detail="Este link de convite não é mais válido. Peça um novo link ao administrador da família.",
+        )
 
     # 3. Persistent HttpOnly Member cookie (e.g. PWA Home Screen launch)
     cookie_member_tok = (request.cookies.get(MEMBER_COOKIE_NAME) or "").strip()
@@ -299,7 +301,8 @@ def _on_shutdown() -> None:
 
 
 @app.get("/api/auth/status")
-def auth_status() -> dict[str, Any]:
+def auth_status(response: Response) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store"
     bundle = store.get_household_bundle()
     hh = bundle["household"]
     return {
@@ -331,9 +334,11 @@ def auth_verify(payload: PasscodeVerifyRequest, response: Response) -> dict[str,
 @app.get("/api/state")
 def get_full_state(
     request: Request,
+    response: Response,
     include_completed: bool = True,
     auth: AuthContext = Depends(resolve_auth_context),
 ) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store"
     is_admin = auth.access_mode == "admin"
     bundle = store.get_household_bundle(include_admin_secrets=is_admin)
     full_gcal = gcal_sync.get_public_gcal_status(
@@ -804,6 +809,7 @@ def _describe_pending_confirmation(fc: types.FunctionCall) -> dict[str, Any]:
             end_iso=end_iso_raw,
             participants=participants,
             title=formatted_title,
+            location=str(tool_args.get("location") or ""),
             recurrence=recurrence,
             occurrences=occurrences,
         )
@@ -984,6 +990,14 @@ async def chat_with_concierge(
         {"filename": a.filename or "attachment", "mime_type": a.mime_type}
         for a in payload.attachments
     ]
+    today_ymd = now_local.strftime("%Y-%m-%d")
+    already_replied_today = store.has_assistant_reply_on_local_date(
+        member_name=effective_member_name,
+        local_date_ymd=today_ymd,
+        tz_name=tz_name,
+        session_id=payload.session_id,
+    )
+
     store.ensure_chat_session(
         payload.session_id,
         first_prompt=display_user_text,
@@ -999,9 +1013,15 @@ async def chat_with_concierge(
         attachments_meta=attachments_meta,
     )
 
+    date_directive = (
+        "First Reply Today: NO (do NOT repeat today's date in your reply; use Current Local Date silently for relative dates)"
+        if already_replied_today
+        else "First Reply Today: YES (mention today's date at most once only if helpful)"
+    )
     contextual_prompt = (
         f"[Active Family Member: {effective_member_name} | "
-        f"Current Local Date: {now_local.strftime('%Y-%m-%d (%A) %H:%M')}]\n"
+        f"Current Local Date: {now_local.strftime('%Y-%m-%d (%A) %H:%M')} | "
+        f"{date_directive}]\n"
         f"{user_text}"
     )
 
@@ -1028,6 +1048,7 @@ async def chat_with_concierge(
                     "active_member_name": effective_member_name,
                     "active_member_id": effective_member_id,
                     "routed_tier": route_hint.tier.value,
+                    "already_replied_today": already_replied_today,
                 },
                 include_admin_secrets=(auth.access_mode == "admin"),
                 speaker_filter=auth.speaker_filter,
@@ -1077,7 +1098,7 @@ async def confirm_concierge_tool(
         if owned_sess is None:
             raise HTTPException(status_code=403, detail="Esta conversa pertence a outro membro da família.")
 
-    decision_label = f"{'✓ Aprovado' if payload.confirmed else '✕ Cancelado'} por {effective_member_name}"
+    decision_label = "✓ Aprovado" if payload.confirmed else "✕ Cancelado"
     store.resolve_message_confirmation(
         payload.session_id,
         payload.confirmation_call_id,
@@ -1111,6 +1132,7 @@ async def confirm_concierge_tool(
                 state_delta={
                     "active_member_name": effective_member_name,
                     "active_member_id": effective_member_id,
+                    "already_replied_today": True,
                 },
                 include_admin_secrets=(auth.access_mode == "admin"),
                 speaker_filter=auth.speaker_filter,
@@ -1157,6 +1179,7 @@ def serve_index(
     admin: Optional[str] = None,
 ) -> FileResponse:
     resp = FileResponse(STATIC_DIR / "index.html")
+    resp.headers["Cache-Control"] = "no-cache"
     tok = (m or "").strip()
     if tok and store.get_member_by_invite_token(tok) is not None:
         resp.set_cookie(

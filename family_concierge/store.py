@@ -25,17 +25,65 @@ SEED_DATA_PATH = Path(__file__).resolve().parent / "seed_data.json"
 _BACKUP_LOCK = threading.Lock()
 _RESTORED_RUNTIME_MAP: dict[str, str] = {}
 _LAST_SYNCED_MTIME_NS: dict[str, int] = {}
-_LAST_MTIME_CHECK_MONOTONIC: dict[str, float] = {}
 _INITIALIZED_RUNTIME_PATHS: set[str] = set()
 
 
+def _detect_cloud_run_mount_dir() -> Optional[Path]:
+    """Auto-detects persistent volume mounts (`/app/data`, `/mnt/*`, or any `gcsfuse` mount) on Cloud Run."""
+    if not os.environ.get("K_SERVICE"):
+        return None
+    for candidate in ("/app/data", "/mnt/data", "/data"):
+        p = Path(candidate)
+        if p.is_dir():
+            return p
+    try:
+        mounts_text = Path("/proc/mounts").read_text(encoding="utf-8")
+        for line in mounts_text.splitlines():
+            parts = line.split()
+            if len(parts) >= 3:
+                mount_point, fs_type = parts[1], parts[2].lower()
+                if "gcsfuse" in fs_type or (
+                    mount_point.startswith(("/mnt/", "/data/"))
+                    and fs_type not in ("overlay", "tmpfs", "proc", "sysfs", "devpts", "cgroup", "cgroup2")
+                ):
+                    mp = Path(mount_point)
+                    if mp.is_dir():
+                        return mp
+    except OSError:
+        pass
+    return None
+
+
 def get_db_path() -> str:
-    """Returns the configured SQLite file path for shared household state."""
-    return os.environ.get("FAMILY_OPS_DB_PATH", str(DEFAULT_DB_PATH))
+    """Returns the configured SQLite file path, auto-detecting Cloud Run `/app/data` mounts."""
+    explicit = os.environ.get("FAMILY_OPS_DB_PATH", "").strip()
+    if explicit:
+        return explicit
+    mount_dir = _detect_cloud_run_mount_dir()
+    if mount_dir is not None:
+        return str(mount_dir / "family_ops.db")
+    return str(DEFAULT_DB_PATH)
+
+
+def _sqlite_file_is_configured(db_file: Path) -> bool:
+    """Checks safely whether `db_file` contains an already-configured household (`is_configured = 1`)."""
+    if not db_file.is_file():
+        return False
+    try:
+        if db_file.stat().st_size == 0:
+            return False
+        conn = sqlite3.connect(str(db_file), timeout=5.0)
+        try:
+            row = conn.execute("SELECT is_configured FROM household_config WHERE id = 1").fetchone()
+            return bool(row and int(row[0]) == 1)
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error):
+        return False
 
 
 def resolve_sqlite_runtime_path(configured_path: str) -> str:
-    """Maps GCSFUSE SQLite paths onto fast local `/tmp` storage on Cloud Run (`K_SERVICE`), refreshing if GCS is newer."""
+    """Maps GCSFUSE SQLite paths onto fast local `/tmp` storage on Cloud Run (`K_SERVICE`), refreshing whenever GCS is newer."""
     if not configured_path or configured_path == ":memory:":
         return configured_path
 
@@ -57,32 +105,31 @@ def resolve_sqlite_runtime_path(configured_path: str) -> str:
         digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
         runtime_path = Path(_RESTORED_RUNTIME_MAP.get(key) or (runtime_dir / f"{digest}_{target.name}"))
 
-        now_mono = time.monotonic()
-        should_stat = (not runtime_path.exists()) or (
-            now_mono - _LAST_MTIME_CHECK_MONOTONIC.get(key, 0.0) >= 1.5
-        )
-        if should_stat:
-            _LAST_MTIME_CHECK_MONOTONIC[key] = now_mono
-            try:
-                if target.is_file():
-                    st = target.stat()
-                    if st.st_size > 0 and (
-                        not runtime_path.exists()
-                        or st.st_mtime_ns > _LAST_SYNCED_MTIME_NS.get(key, 0)
-                    ):
-                        for suffix in ("-wal", "-shm"):
-                            Path(f"{runtime_path}{suffix}").unlink(missing_ok=True)
-                        shutil.copyfile(str(target), str(runtime_path))
-                        _LAST_SYNCED_MTIME_NS[key] = st.st_mtime_ns
-            except OSError as exc:
-                logger.warning("Could not restore SQLite backup from %s: %s", target, exc)
+        try:
+            if target.is_file():
+                st = target.stat()
+                if st.st_size > 0 and (
+                    not runtime_path.exists()
+                    or st.st_mtime_ns > _LAST_SYNCED_MTIME_NS.get(key, 0)
+                ):
+                    for suffix in ("-wal", "-shm"):
+                        Path(f"{runtime_path}{suffix}").unlink(missing_ok=True)
+                    shutil.copyfile(str(target), str(runtime_path))
+                    _LAST_SYNCED_MTIME_NS[key] = st.st_mtime_ns
+        except OSError as exc:
+            logger.warning("Could not restore SQLite backup from %s: %s", target, exc)
 
         _RESTORED_RUNTIME_MAP[key] = str(runtime_path)
         return str(runtime_path)
 
 
-def sync_sqlite_backup(runtime_path: str, configured_path: str) -> None:
-    """Exports a consistent single-file SQLite snapshot from `runtime_path` to `configured_path` (e.g. GCSFUSE)."""
+def sync_sqlite_backup(
+    runtime_path: str,
+    configured_path: str,
+    *,
+    allow_reset: bool = False,
+) -> None:
+    """Atomically exports a consistent single-file SQLite snapshot from `runtime_path` to `configured_path`."""
     if (
         not runtime_path
         or not configured_path
@@ -98,6 +145,7 @@ def sync_sqlite_backup(runtime_path: str, configured_path: str) -> None:
 
     with _BACKUP_LOCK:
         snap_tmp = runtime_file.with_name(f"{runtime_file.name}.snap.tmp")
+        gcs_tmp = target_file.with_name(f".{target_file.name}.tmp.{uuid.uuid4().hex[:8]}")
         try:
             src_conn = sqlite3.connect(str(runtime_file), timeout=10.0)
             dst_conn = sqlite3.connect(str(snap_tmp), timeout=10.0)
@@ -106,12 +154,34 @@ def sync_sqlite_backup(runtime_path: str, configured_path: str) -> None:
             finally:
                 dst_conn.close()
                 src_conn.close()
+
+            # Non-clobber safeguard: never let an unconfigured cold-start DB overwrite a configured GCS household
+            if (
+                not allow_reset
+                and target_file.name == "family_ops.db"
+                and not _sqlite_file_is_configured(snap_tmp)
+                and _sqlite_file_is_configured(target_file)
+            ):
+                for suffix in ("-wal", "-shm"):
+                    Path(f"{runtime_file}{suffix}").unlink(missing_ok=True)
+                shutil.copyfile(str(target_file), str(runtime_file))
+                _LAST_SYNCED_MTIME_NS[str(target_file)] = target_file.stat().st_mtime_ns
+                return
+
             target_file.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(str(snap_tmp), str(target_file))
             try:
-                key = str(target_file)
-                _LAST_SYNCED_MTIME_NS[key] = target_file.stat().st_mtime_ns
-                _LAST_MTIME_CHECK_MONOTONIC[key] = time.monotonic()
+                with open(snap_tmp, "rb") as rf, open(gcs_tmp, "wb") as wf:
+                    shutil.copyfileobj(rf, wf)
+                    wf.flush()
+                    try:
+                        os.fsync(wf.fileno())
+                    except OSError:
+                        pass
+                os.replace(str(gcs_tmp), str(target_file))
+            except OSError:
+                shutil.copyfile(str(snap_tmp), str(target_file))
+            try:
+                _LAST_SYNCED_MTIME_NS[str(target_file)] = target_file.stat().st_mtime_ns
             except OSError:
                 pass
         except OSError as exc:
@@ -119,10 +189,11 @@ def sync_sqlite_backup(runtime_path: str, configured_path: str) -> None:
         except sqlite3.Error as exc:
             logger.warning("SQLite snapshot backup error for %s: %s", target_file, exc)
         finally:
-            try:
-                snap_tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
+            for tmp_f in (snap_tmp, gcs_tmp):
+                try:
+                    tmp_f.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 @contextmanager
@@ -341,32 +412,6 @@ def init_db() -> None:
         now_iso = datetime.now(timezone.utc).isoformat()
         seed = _load_seed_fixture()
 
-        if seed is None:
-            user_ver_row = conn.execute("PRAGMA user_version").fetchone()
-            user_ver = int(user_ver_row[0]) if user_ver_row else 0
-            if user_ver < SCHEMA_CLEAN_START_VERSION:
-                # One-time clean reset from pre-v2 seeded Foobar Family state to brand-new unconfigured onboarding
-                conn.execute("DELETE FROM calendar_events")
-                conn.execute("DELETE FROM action_items")
-                conn.execute("DELETE FROM household_memories")
-                conn.execute("DELETE FROM chat_messages")
-                conn.execute("DELETE FROM chat_sessions")
-                conn.execute("DELETE FROM family_members")
-                conn.execute("DELETE FROM gcal_oauth_states")
-                conn.execute("DELETE FROM gcal_integration")
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO household_config (
-                        id, household_name, timezone, preferred_language, passcode_hash,
-                        sports_music_buffer_min, is_configured, updated_at
-                    ) VALUES (1, '', 'America/Sao_Paulo', 'pt-BR', '', 30, 0, ?)
-                    """,
-                    (now_iso,),
-                )
-                conn.execute(f"PRAGMA user_version = {SCHEMA_CLEAN_START_VERSION}")
-                _INITIALIZED_RUNTIME_PATHS.add(runtime_path)
-                return
-
         row = conn.execute("SELECT id FROM household_config WHERE id = 1").fetchone()
         if row is not None:
             _INITIALIZED_RUNTIME_PATHS.add(runtime_path)
@@ -486,8 +531,10 @@ def init_db() -> None:
 
 
 def reset_household_to_new_user() -> dict[str, Any]:
-    """Wipes household data back to a clean first-time onboarding state."""
+    """Wipes household data back to a clean first-time onboarding state (explicit Admin action only)."""
     init_db()
+    configured_path = get_db_path()
+    runtime_path = resolve_sqlite_runtime_path(configured_path)
     now_iso = datetime.now(timezone.utc).isoformat()
     with _connect() as conn:
         conn.execute("DELETE FROM calendar_events")
@@ -513,6 +560,8 @@ def reset_household_to_new_user() -> dict[str, Any]:
             """,
             (now_iso,),
         )
+    if runtime_path != configured_path:
+        sync_sqlite_backup(runtime_path, configured_path, allow_reset=True)
     return get_household_bundle()
 
 
@@ -1307,6 +1356,53 @@ def get_chat_session_detail(
         "session": dict(s_row),
         "messages": [_deserialize_chat_message_row(dict(r)) for r in m_rows],
     }
+
+
+def has_assistant_reply_on_local_date(
+    *,
+    member_name: str,
+    local_date_ymd: str,
+    tz_name: str = "America/Sao_Paulo",
+    session_id: Optional[str] = None,
+) -> bool:
+    """Returns True if `member_name` (or `session_id`) has already received at least one assistant reply on `local_date_ymd`."""
+    owner = (member_name or "").strip()
+    sid = (session_id or "").strip()
+    if (not owner and not sid) or not local_date_ymd:
+        return False
+    init_db()
+    try:
+        tz = ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        tz = timezone.utc
+
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT m.created_at
+            FROM chat_messages m
+            JOIN chat_sessions s ON s.session_id = m.session_id
+            WHERE m.role = 'assistant'
+              AND (LOWER(s.created_by) = LOWER(?) OR (? != '' AND m.session_id = ?))
+            ORDER BY m.created_at DESC, m.rowid DESC
+            LIMIT 20
+            """,
+            (owner, sid, sid),
+        ).fetchall()
+
+    for r in rows:
+        raw_ts = str(r["created_at"] or "").strip()
+        if not raw_ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(raw_ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt.astimezone(tz).strftime("%Y-%m-%d") == local_date_ymd:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def delete_chat_session_record(session_id: str, owner_name: Optional[str] = None) -> bool:
