@@ -46,6 +46,8 @@
   let recordingStream = null;
   let recordingTimerId = null;
   let recordingStartedAt = 0;
+  let recordingStopPromise = null;
+  let suppressPendingRenderOnStop = false;
 
   function getStoredPasscode() {
     return localStorage.getItem(PASSCODE_KEY) || "";
@@ -969,13 +971,33 @@
     if (timerEl) timerEl.textContent = "";
   }
 
+  function finalizeActiveRecording(silentStage = false) {
+    if (recordingStopPromise) {
+      return recordingStopPromise;
+    }
+    if (!mediaRecorder || mediaRecorder.state === "inactive") {
+      return Promise.resolve(null);
+    }
+    const pendingPromise = recordingStopPromise;
+    suppressPendingRenderOnStop = silentStage;
+    try {
+      if (mediaRecorder.state === "recording" && typeof mediaRecorder.requestData === "function") {
+        mediaRecorder.requestData();
+      }
+    } catch (_err) {
+      // Ignore if browser disallows requestData right before stop
+    }
+    mediaRecorder.stop();
+    return pendingPromise || Promise.resolve(null);
+  }
+
   async function toggleMicRecording() {
     clearBanner("chat-feedback");
     const micBtn = document.getElementById("btn-mic-record");
     const timerEl = document.getElementById("mic-timer-label");
 
     if (mediaRecorder && mediaRecorder.state === "recording") {
-      mediaRecorder.stop();
+      await finalizeActiveRecording(false);
       return;
     }
 
@@ -992,34 +1014,73 @@
       recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const chosenMime = pickSupportedAudioMime();
       recordingChunks = [];
-      mediaRecorder = chosenMime
+      suppressPendingRenderOnStop = false;
+      const recorder = chosenMime
         ? new MediaRecorder(recordingStream, { mimeType: chosenMime })
         : new MediaRecorder(recordingStream);
+      mediaRecorder = recorder;
 
-      mediaRecorder.ondataavailable = (ev) => {
+      recorder.ondataavailable = (ev) => {
         if (ev.data && ev.data.size > 0) {
           recordingChunks.push(ev.data);
         }
       };
 
-      mediaRecorder.onstop = async () => {
-        const actualMime = (mediaRecorder.mimeType || "audio/webm").split(";", 1)[0];
-        stopMicStream();
-        if (!recordingChunks.length) return;
-        const blob = new Blob(recordingChunks, { type: actualMime });
-        const { dataUrl, base64Part } = await fileOrBlobToBase64(blob);
-        appState.pendingAttachments.push({
-          id: `voice-${Math.random().toString(36).slice(2, 9)}`,
-          filename: "mensagem-de-voz.webm",
-          mime_type: actualMime,
-          data_base64: base64Part,
-          preview_url: dataUrl,
-        });
-        renderPendingAttachments();
-        document.getElementById("btn-send-chat").focus();
+      let resolveStop;
+      recordingStopPromise = new Promise((resolve) => {
+        resolveStop = resolve;
+      });
+
+      recorder.onstop = async () => {
+        try {
+          const actualMime = (recorder.mimeType || "audio/webm").split(";", 1)[0];
+          stopMicStream();
+          if (!recordingChunks.length) {
+            resolveStop(null);
+            return;
+          }
+          const ext = actualMime.includes("mp4") || actualMime.includes("aac")
+            ? "m4a"
+            : actualMime.includes("ogg")
+            ? "ogg"
+            : "webm";
+          const blob = new Blob(recordingChunks, { type: actualMime });
+          const { dataUrl, base64Part } = await fileOrBlobToBase64(blob);
+          const stagedVoice = {
+            id: `voice-${Math.random().toString(36).slice(2, 9)}`,
+            filename: `mensagem-de-voz.${ext}`,
+            mime_type: actualMime,
+            data_base64: base64Part,
+            preview_url: dataUrl,
+          };
+          appState.pendingAttachments.push(stagedVoice);
+          if (!suppressPendingRenderOnStop) {
+            renderPendingAttachments();
+            document.getElementById("btn-send-chat").focus();
+          }
+          resolveStop(stagedVoice);
+        } catch (_err) {
+          resolveStop(null);
+        } finally {
+          suppressPendingRenderOnStop = false;
+          recordingStopPromise = null;
+          if (mediaRecorder === recorder) {
+            mediaRecorder = null;
+          }
+        }
       };
 
-      mediaRecorder.start();
+      recorder.onerror = () => {
+        stopMicStream();
+        suppressPendingRenderOnStop = false;
+        recordingStopPromise = null;
+        if (mediaRecorder === recorder) {
+          mediaRecorder = null;
+        }
+        resolveStop(null);
+      };
+
+      recorder.start(250);
       recordingStartedAt = Date.now();
       micBtn.classList.add("btn-recording");
       if (timerEl) timerEl.textContent = "0:00";
@@ -1031,6 +1092,8 @@
       }, 500);
     } catch (err) {
       stopMicStream();
+      recordingStopPromise = null;
+      mediaRecorder = null;
       showBanner(
         "chat-feedback",
         `Não foi possível acessar o microfone (${err.message}). Verifique a permissão do navegador ou anexe um áudio.`,
@@ -2458,9 +2521,8 @@
 
   document.getElementById("chat-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    if (mediaRecorder && mediaRecorder.state === "recording") {
-      mediaRecorder.stop();
-      return;
+    if ((mediaRecorder && mediaRecorder.state === "recording") || recordingStopPromise) {
+      await finalizeActiveRecording(true);
     }
     const input = document.getElementById("chat-input");
     const text = input.value.trim();

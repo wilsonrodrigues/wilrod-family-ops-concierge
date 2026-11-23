@@ -1,6 +1,6 @@
 [project]
 name = "family-ops-concierge"
-version = "0.9.1"
+version = "0.9.2"
 description = "Multimodal Multi-Agent Family Calendar, Errands & Wish-List Concierge built with Google ADK"
 readme = "README.md"
 requires-python = ">=3.11"
