@@ -48,6 +48,7 @@
   let recordingStartedAt = 0;
   let recordingStopPromise = null;
   let suppressPendingRenderOnStop = false;
+  let isSubmittingChatForm = false;
 
   function getStoredPasscode() {
     return localStorage.getItem(PASSCODE_KEY) || "";
@@ -972,22 +973,20 @@
   }
 
   function finalizeActiveRecording(silentStage = false) {
-    if (recordingStopPromise) {
-      return recordingStopPromise;
-    }
-    if (!mediaRecorder || mediaRecorder.state === "inactive") {
+    if (!mediaRecorder && !recordingStopPromise) {
       return Promise.resolve(null);
     }
     const pendingPromise = recordingStopPromise;
-    suppressPendingRenderOnStop = silentStage;
-    try {
-      if (mediaRecorder.state === "recording" && typeof mediaRecorder.requestData === "function") {
-        mediaRecorder.requestData();
-      }
-    } catch (_err) {
-      // Ignore if browser disallows requestData right before stop
+    if (silentStage) {
+      suppressPendingRenderOnStop = true;
     }
-    mediaRecorder.stop();
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      try {
+        mediaRecorder.stop();
+      } catch (_err) {
+        // Ignore if recorder already transitioned to inactive
+      }
+    }
     return pendingPromise || Promise.resolve(null);
   }
 
@@ -1080,7 +1079,7 @@
         resolveStop(null);
       };
 
-      recorder.start(250);
+      recorder.start();
       recordingStartedAt = Date.now();
       micBtn.classList.add("btn-recording");
       if (timerEl) timerEl.textContent = "0:00";
@@ -2499,20 +2498,28 @@
 
   document.getElementById("chat-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    if ((mediaRecorder && mediaRecorder.state === "recording") || recordingStopPromise) {
-      await finalizeActiveRecording(true);
-    }
-    const input = document.getElementById("chat-input");
-    const text = input.value.trim();
-    const attachmentsToSend = [...appState.pendingAttachments];
-    if (!text && !attachmentsToSend.length) {
-      input.focus();
+    if (isSubmittingChatForm) {
       return;
     }
-    input.value = "";
-    appState.pendingAttachments = [];
-    renderPendingAttachments();
-    await sendChatMessage(text, attachmentsToSend);
+    isSubmittingChatForm = true;
+    try {
+      if ((mediaRecorder && mediaRecorder.state !== "inactive") || recordingStopPromise) {
+        await finalizeActiveRecording(true);
+      }
+      const input = document.getElementById("chat-input");
+      const text = input.value.trim();
+      const attachmentsToSend = [...appState.pendingAttachments];
+      if (!text && !attachmentsToSend.length) {
+        input.focus();
+        return;
+      }
+      input.value = "";
+      appState.pendingAttachments = [];
+      renderPendingAttachments();
+      await sendChatMessage(text, attachmentsToSend);
+    } finally {
+      isSubmittingChatForm = false;
+    }
   });
 
   const newChatBtn = document.getElementById("btn-new-chat");
