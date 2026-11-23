@@ -1,9 +1,19 @@
 (() => {
   const PASSCODE_KEY = "family_ops_passcode";
-  const ACTIVE_MEMBER_KEY = "family_ops_active_member_id";
-  const SESSION_KEY = "family_ops_chat_session_id";
+  const MEMBER_TOKEN_KEY = "family_ops_member_token";
+  const SESSION_KEY_PREFIX = "family_ops_chat_session_id";
+
+  const initialUrlParams = new URLSearchParams(window.location.search);
+  const initialUrlMemberToken = (initialUrlParams.get("m") || "").trim();
+  if (initialUrlMemberToken) {
+    localStorage.setItem(MEMBER_TOKEN_KEY, initialUrlMemberToken);
+  } else if (initialUrlParams.get("admin") === "1") {
+    localStorage.removeItem(MEMBER_TOKEN_KEY);
+  }
 
   let appState = {
+    accessMode: "admin", // "admin" | "member"
+    lockedMember: null,
     household: {},
     members: [],
     events: [],
@@ -12,14 +22,21 @@
     gcalCalendars: [],
     chatSessions: [],
     messagesBySession: {}, // { [sessionId]: Array<message> }
-    activeMemberId: localStorage.getItem(ACTIVE_MEMBER_KEY) || "",
     selectedEventParticipants: [],
     calendarFilter: "ALL",
     calendarHorizon: "14D",
     pendingAttachments: [], // [{ id, filename, mime_type, data_base64, preview_url }]
-    sessionId: localStorage.getItem(SESSION_KEY) || `fam-session-${Math.random().toString(36).slice(2, 8)}`,
+    sessionId: `fam-session-${Math.random().toString(36).slice(2, 8)}`,
   };
-  localStorage.setItem(SESSION_KEY, appState.sessionId);
+
+  function getSessionStorageKey() {
+    const mid = (appState.lockedMember && appState.lockedMember.member_id) || "default";
+    return `${SESSION_KEY_PREFIX}_${mid}`;
+  }
+
+  function persistActiveSessionId(sid) {
+    localStorage.setItem(getSessionStorageKey(), sid);
+  }
 
   // Per-session in-flight tracker: Map<sessionId, { controller: AbortController, statusText: string }>
   const inflightBySession = new Map();
@@ -34,9 +51,20 @@
     return localStorage.getItem(PASSCODE_KEY) || "";
   }
 
+  function getActiveMemberToken() {
+    const liveUrlTok = (new URLSearchParams(window.location.search).get("m") || "").trim();
+    if (liveUrlTok) return liveUrlTok;
+    if (getStoredPasscode()) return "";
+    return localStorage.getItem(MEMBER_TOKEN_KEY) || "";
+  }
+
   async function apiFetch(path, options = {}) {
     const headers = Object.assign(
-      { "Content-Type": "application/json", "X-Household-Passcode": getStoredPasscode() },
+      {
+        "Content-Type": "application/json",
+        "X-Household-Passcode": getStoredPasscode(),
+        "X-Member-Token": getActiveMemberToken(),
+      },
       options.headers || {}
     );
     const resp = await fetch(path, Object.assign({}, options, { headers }));
@@ -55,20 +83,26 @@
   }
 
   function getActiveMember() {
-    const found = appState.members.find((m) => m.member_id === appState.activeMemberId);
-    return found || appState.members[0] || { member_id: "default", name: "Família", avatar: "" };
+    if (appState.lockedMember && appState.lockedMember.name) {
+      return appState.lockedMember;
+    }
+    return appState.members[0] || { member_id: "default", name: "Família", avatar: "" };
   }
 
   function switchTab(targetId) {
+    const resolvedTarget =
+      targetId === "view-setup" && appState.accessMode !== "admin"
+        ? "view-concierge"
+        : targetId;
     document.querySelectorAll(".nav-tab").forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.target === targetId);
+      btn.classList.toggle("active", btn.dataset.target === resolvedTarget);
     });
     document.querySelectorAll(".view-panel").forEach((panel) => {
-      panel.classList.toggle("active", panel.id === targetId);
+      panel.classList.toggle("active", panel.id === resolvedTarget);
     });
     const gearBtn = document.getElementById("btn-open-setup");
     if (gearBtn) {
-      gearBtn.classList.toggle("active", targetId === "view-setup");
+      gearBtn.classList.toggle("active", resolvedTarget === "view-setup");
     }
   }
 
@@ -177,6 +211,7 @@
   function renderHeaderAndSwitchers() {
     const hh = appState.household || {};
     const isConfigured = Boolean(hh.is_configured);
+    const isAdmin = appState.accessMode === "admin";
     let todayFormatted = "";
     try {
       todayFormatted = new Date().toLocaleDateString(hh.preferred_language || "pt-BR", {
@@ -193,43 +228,29 @@
     document.getElementById("household-title").textContent = hh.household_name || "Family Ops Concierge";
     const gcalSuffix =
       appState.gcal && appState.gcal.active_sync
-        ? ` | 📅 Google Agenda: ${appState.gcal.calendar_summary || appState.gcal.calendar_id}`
+        ? ` | 📅 Google Agenda: ${appState.gcal.calendar_summary || appState.gcal.calendar_id || "Conectada"}`
         : "";
     document.getElementById("household-rules-summary").textContent = isConfigured
       ? `Hoje: ${todayFormatted}${gcalSuffix}`
       : `Hoje: ${todayFormatted} | Configuração inicial da família`;
 
     const navEl = document.getElementById("primary-nav");
-    const switcherEl = document.getElementById("active-member-switcher");
+    const gearBtn = document.getElementById("btn-open-setup");
     const closeSetupBtn = document.getElementById("btn-close-setup");
     const welcomeBanner = document.getElementById("setup-welcome-banner");
     if (navEl) navEl.style.display = isConfigured ? "grid" : "none";
-    if (switcherEl) switcherEl.style.display = isConfigured && appState.members.length ? "flex" : "none";
-    if (closeSetupBtn) closeSetupBtn.style.display = isConfigured ? "inline-flex" : "none";
-    if (welcomeBanner) welcomeBanner.classList.toggle("visible", !isConfigured);
+    if (gearBtn) gearBtn.style.display = isAdmin ? "inline-grid" : "none";
+    if (closeSetupBtn) closeSetupBtn.style.display = isConfigured && isAdmin ? "inline-flex" : "none";
+    if (welcomeBanner) welcomeBanner.classList.toggle("visible", !isConfigured && isAdmin);
 
     const active = getActiveMember();
-    appState.activeMemberId = active.member_id;
-    localStorage.setItem(ACTIVE_MEMBER_KEY, active.member_id);
-
-    const pillsEl = document.getElementById("active-member-pills");
-    pillsEl.innerHTML = "";
-    appState.members.forEach((m) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = `member-pill ${m.member_id === active.member_id ? "active" : ""}`;
-      btn.textContent = m.name;
-      btn.addEventListener("click", () => {
-        appState.activeMemberId = m.member_id;
-        appState.selectedEventParticipants = [m.name];
-        localStorage.setItem(ACTIVE_MEMBER_KEY, m.member_id);
-        renderAll();
-      });
-      pillsEl.appendChild(btn);
-    });
+    const lockedPillEl = document.getElementById("locked-user-pill");
+    if (lockedPillEl) {
+      lockedPillEl.textContent = isConfigured && appState.members.length ? active.name : "";
+    }
 
     document.getElementById("chat-speaker-indicator").textContent =
-      appState.members.length ? active.name : "";
+      isConfigured && appState.members.length ? active.name : "";
 
     if (!appState.selectedEventParticipants.length && active.name) {
       appState.selectedEventParticipants = [active.name];
@@ -516,7 +537,27 @@
     return row;
   }
 
+  function syncAdminMemberDropdown(preferredAdminId = "") {
+    const sel = document.getElementById("cfg-admin-member");
+    if (!sel) return;
+    const currentChoice = preferredAdminId || sel.value || (appState.household && appState.household.admin_member_id) || "";
+    const rows = Array.from(document.querySelectorAll(".member-editor-row"));
+    sel.innerHTML = "";
+    rows.forEach((r, idx) => {
+      const mid = r.dataset.memberId;
+      const mname = r.querySelector(".m-name").value.trim() || `Membro ${idx + 1}`;
+      const opt = document.createElement("option");
+      opt.value = mid;
+      opt.textContent = mname;
+      if ((currentChoice && mid === currentChoice) || (!currentChoice && idx === 0)) {
+        opt.selected = true;
+      }
+      sel.appendChild(opt);
+    });
+  }
+
   function renderSetupForm() {
+    if (appState.accessMode !== "admin") return;
     const hh = appState.household || {};
     const cfgNameEl = document.getElementById("cfg-name");
     if (document.activeElement !== cfgNameEl) {
@@ -525,10 +566,18 @@
     document.getElementById("cfg-language").value = hh.preferred_language || "pt-BR";
     document.getElementById("cfg-timezone").value = hh.timezone || "America/Sao_Paulo";
     document.getElementById("cfg-buffer").value = hh.sports_music_buffer_min ?? 30;
-    document.getElementById("cfg-passcode").value = "";
-    document.getElementById("cfg-passcode").placeholder = hh.has_passcode
-      ? "Senha ativa (deixe em branco para manter)"
-      : "PIN opcional para os celulares da família";
+    const passEl = document.getElementById("cfg-passcode");
+    passEl.value = "";
+    passEl.required = !hh.has_passcode;
+    passEl.placeholder = hh.has_passcode
+      ? "PIN ativo (deixe em branco para manter)"
+      : "Crie um PIN do Administrador (obrigatório)";
+    const passLabelEl = document.getElementById("cfg-passcode-label");
+    if (passLabelEl) {
+      passLabelEl.textContent = hh.has_passcode
+        ? "PIN do Administrador (ativo)"
+        : "PIN do Administrador (obrigatório)";
+    }
 
     const listEl = document.getElementById("setup-members-list");
     listEl.innerHTML = "";
@@ -537,6 +586,7 @@
     } else {
       appendMemberSetupRow({ role: "Parent" });
     }
+    syncAdminMemberDropdown(hh.admin_member_id || "");
 
     renderGcalSetupCard();
   }
@@ -610,11 +660,85 @@
     }
   }
 
+  async function shareMemberInviteLink(row) {
+    clearBanner("setup-feedback");
+    const mId = row.dataset.memberId;
+    const typedName = row.querySelector(".m-name").value.trim();
+    if (!typedName) {
+      showBanner("setup-feedback", "Digite o nome do familiar antes de compartilhar o link.", "error");
+      row.querySelector(".m-name").focus();
+      return;
+    }
+
+    let existingMember = appState.members.find((m) => m.member_id === mId);
+    const needsSave =
+      !appState.household.is_configured ||
+      !existingMember ||
+      !existingMember.invite_token ||
+      existingMember.name !== typedName;
+
+    if (needsSave) {
+      const hhName = document.getElementById("cfg-name").value.trim();
+      const newPass = document.getElementById("cfg-passcode").value.trim();
+      if (hhName.length < 2) {
+        showBanner("setup-feedback", "Preencha o Nome da Família acima antes de compartilhar links.", "error");
+        document.getElementById("cfg-name").focus();
+        return;
+      }
+      if (!appState.household.has_passcode && !newPass) {
+        showBanner("setup-feedback", "Defina um PIN do Administrador acima antes de enviar links aos familiares.", "error");
+        document.getElementById("cfg-passcode").focus();
+        return;
+      }
+      const ok = await saveHouseholdSetupFromForm(false);
+      if (!ok) return;
+      existingMember =
+        appState.members.find((m) => m.member_id === mId) ||
+        appState.members.find((m) => m.name.toLowerCase() === typedName.toLowerCase());
+    }
+
+    if (!existingMember || !existingMember.invite_token) {
+      showBanner("setup-feedback", "Salve as configurações primeiro para gerar o link deste membro.", "error");
+      return;
+    }
+
+    const inviteUrl = `${window.location.origin}/?m=${encodeURIComponent(existingMember.invite_token)}`;
+    const famName = appState.household.household_name || "Family Ops Concierge";
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(inviteUrl);
+      } catch (_err) {
+        // Ignore clipboard errors when native share succeeds
+      }
+    }
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `${famName} - ${existingMember.name}`,
+          text: `Oi ${existingMember.name}! Aqui está seu link pessoal da agenda e listas da nossa família (${famName}):`,
+          url: inviteUrl,
+        });
+        showBanner("setup-feedback", `Link exclusivo de ${existingMember.name} compartilhado!`, "success");
+        return;
+      } catch (_err) {
+        // Fallback to copied link banner below
+      }
+    }
+
+    showBanner(
+      "setup-feedback",
+      `Link exclusivo de ${existingMember.name} copiado! Envie no WhatsApp: ${inviteUrl}`,
+      "success"
+    );
+  }
+
   function appendMemberSetupRow(member = {}) {
     const listEl = document.getElementById("setup-members-list");
     const row = document.createElement("div");
     row.className = "member-editor-row";
-    row.dataset.memberId = member.member_id || "";
+    row.dataset.memberId = member.member_id || `mem-${Math.random().toString(36).slice(2, 10)}`;
 
     row.innerHTML = `
       <input type="text" class="m-name" value="${escapeAttr(member.name || "")}" placeholder="Nome (ex.: Lucas)" required />
@@ -624,15 +748,28 @@
         <option value="Child" ${member.role === "Child" ? "selected" : ""}>Criança</option>
         <option value="Relative" ${member.role === "Relative" ? "selected" : ""}>Familiar</option>
       </select>
+      <button type="button" class="m-share-btn m-share" title="Compartilhar link exclusivo deste familiar" aria-label="Compartilhar link exclusivo deste familiar">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="18" cy="5" r="3"></circle>
+          <circle cx="6" cy="12" r="3"></circle>
+          <circle cx="18" cy="19" r="3"></circle>
+          <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+          <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+        </svg>
+      </button>
       <button type="button" class="m-remove-btn m-remove" title="Remover membro" aria-label="Remover membro">✕</button>
     `;
 
+    row.querySelector(".m-name").addEventListener("input", () => syncAdminMemberDropdown());
+    row.querySelector(".m-share").addEventListener("click", () => shareMemberInviteLink(row));
     row.querySelector(".m-remove").addEventListener("click", () => {
       if (document.querySelectorAll(".member-editor-row").length > 1) {
         row.remove();
+        syncAdminMemberDropdown();
       }
     });
     listEl.appendChild(row);
+    syncAdminMemberDropdown();
   }
 
   function escapeHtml(str) {
@@ -652,7 +789,9 @@
     renderHeaderAndSwitchers();
     renderCalendar();
     renderLists();
-    renderSetupForm();
+    if (appState.accessMode === "admin") {
+      renderSetupForm();
+    }
     renderPendingAttachments();
     renderChatSessionsList();
     syncComposerControls();
@@ -660,6 +799,8 @@
 
   async function loadFullState(initialBootstrap = false) {
     const data = await apiFetch("/api/state?include_completed=true");
+    appState.accessMode = data.access_mode || "admin";
+    appState.lockedMember = data.locked_member || null;
     appState.household = data.household;
     appState.members = data.members;
     appState.events = data.events;
@@ -667,9 +808,15 @@
     appState.gcal = data.gcal || appState.gcal || {};
     appState.chatSessions = data.chat_sessions || [];
 
+    const storedSid = localStorage.getItem(getSessionStorageKey());
+    if (storedSid && initialBootstrap) {
+      appState.sessionId = storedSid;
+    }
+
     if (initialBootstrap) {
       const params = new URLSearchParams(window.location.search);
-      if (params.get("gcal_connected") === "1") {
+      const isAdmin = appState.accessMode === "admin";
+      if (isAdmin && params.get("gcal_connected") === "1") {
         switchTab("view-setup");
         showBanner(
           "gcal-feedback",
@@ -677,16 +824,16 @@
           "success"
         );
         window.history.replaceState({}, "", window.location.pathname);
-      } else if (params.get("gcal_error")) {
+      } else if (isAdmin && params.get("gcal_error")) {
         switchTab("view-setup");
         showBanner("gcal-feedback", `Falha na autenticação Google: ${params.get("gcal_error")}`, "error");
         window.history.replaceState({}, "", window.location.pathname);
-      } else if (!appState.household || !appState.household.is_configured) {
+      } else if (isAdmin && (!appState.household || !appState.household.is_configured)) {
         switchTab("view-setup");
       } else {
         switchTab("view-concierge");
       }
-      if (appState.gcal && appState.gcal.is_connected) {
+      if (isAdmin && appState.gcal && appState.gcal.is_connected) {
         refreshGcalCalendarsDropdown();
       }
     }
@@ -697,9 +844,10 @@
         await loadSessionTranscript(appState.sessionId);
       } else if (appState.chatSessions.length > 0) {
         appState.sessionId = appState.chatSessions[0].session_id;
-        localStorage.setItem(SESSION_KEY, appState.sessionId);
+        persistActiveSessionId(appState.sessionId);
         await loadSessionTranscript(appState.sessionId);
       } else {
+        persistActiveSessionId(appState.sessionId);
         renderActiveSessionMessages();
       }
     }
@@ -1026,6 +1174,7 @@
         const typedMembers = collectSetupFormMembers();
         if ((!appState.household || !appState.household.is_configured) && typedName.length >= 2 && typedMembers.length >= 1) {
           const newPass = document.getElementById("cfg-passcode").value.trim();
+          const adminSel = document.getElementById("cfg-admin-member");
           await apiFetch("/api/household/setup", {
             method: "PUT",
             body: JSON.stringify({
@@ -1033,6 +1182,7 @@
               preferred_language: document.getElementById("cfg-language").value,
               timezone: document.getElementById("cfg-timezone").value.trim(),
               sports_music_buffer_min: Number(document.getElementById("cfg-buffer").value || 30),
+              admin_member_id: adminSel ? adminSel.value : typedMembers[0].member_id,
               new_passcode: newPass || null,
               clear_passcode: false,
               members: typedMembers,
@@ -1040,6 +1190,7 @@
           });
           if (newPass) {
             localStorage.setItem(PASSCODE_KEY, newPass);
+            localStorage.removeItem(MEMBER_TOKEN_KEY);
           }
         }
         await saveGcalLinkSetting(true);
@@ -1206,21 +1357,18 @@
     );
   });
 
-  // Wire Setup Form
-  document.getElementById("btn-add-member-row").addEventListener("click", () => {
-    appendMemberSetupRow({ role: "Child" });
-  });
-
-  document.getElementById("household-setup-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
+  async function saveHouseholdSetupFromForm(navigateAfterSave = true) {
     clearBanner("setup-feedback");
     const members = collectSetupFormMembers();
     if (!members.length) {
       showBanner("setup-feedback", "Adicione pelo menos um membro da família.", "error");
-      return;
+      return false;
     }
 
     const newPass = document.getElementById("cfg-passcode").value.trim();
+    const adminSel = document.getElementById("cfg-admin-member");
+    const adminMemberId = adminSel ? adminSel.value : members[0].member_id;
+
     try {
       await apiFetch("/api/household/setup", {
         method: "PUT",
@@ -1229,6 +1377,7 @@
           preferred_language: document.getElementById("cfg-language").value,
           timezone: document.getElementById("cfg-timezone").value.trim(),
           sports_music_buffer_min: Number(document.getElementById("cfg-buffer").value || 30),
+          admin_member_id: adminMemberId || null,
           new_passcode: newPass || null,
           clear_passcode: false,
           members,
@@ -1236,18 +1385,36 @@
       });
       if (newPass) {
         localStorage.setItem(PASSCODE_KEY, newPass);
+        localStorage.removeItem(MEMBER_TOKEN_KEY);
       }
       await loadFullState();
-      switchTab("view-concierge");
+      if (navigateAfterSave) {
+        switchTab("view-concierge");
+      } else {
+        showBanner("setup-feedback", "Configurações da família salvas!", "success");
+      }
+      return true;
     } catch (err) {
       showBanner("setup-feedback", err.message, "error");
+      return false;
     }
+  }
+
+  // Wire Setup Form
+  document.getElementById("btn-add-member-row").addEventListener("click", () => {
+    appendMemberSetupRow({ role: "Child" });
+  });
+
+  document.getElementById("household-setup-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await saveHouseholdSetupFromForm(true);
   });
 
   document.getElementById("btn-clear-passcode").addEventListener("click", async (e) => {
     e.preventDefault();
     const members = collectSetupFormMembers();
     if (!members.length) return;
+    const adminSel = document.getElementById("cfg-admin-member");
     await apiFetch("/api/household/setup", {
       method: "PUT",
       body: JSON.stringify({
@@ -1255,13 +1422,14 @@
         preferred_language: document.getElementById("cfg-language").value,
         timezone: document.getElementById("cfg-timezone").value.trim(),
         sports_music_buffer_min: Number(document.getElementById("cfg-buffer").value || 30),
+        admin_member_id: adminSel ? adminSel.value : null,
         clear_passcode: true,
         members,
       }),
     });
     localStorage.removeItem(PASSCODE_KEY);
     await loadFullState();
-    showBanner("setup-feedback", "Senha removida.", "success");
+    showBanner("setup-feedback", "PIN removido.", "success");
   });
 
   const resetHouseholdBtn = document.getElementById("btn-reset-household");
@@ -1274,12 +1442,11 @@
       try {
         await apiFetch("/api/household/reset", { method: "POST" });
         localStorage.removeItem(PASSCODE_KEY);
-        localStorage.removeItem(ACTIVE_MEMBER_KEY);
-        localStorage.removeItem(SESSION_KEY);
+        localStorage.removeItem(MEMBER_TOKEN_KEY);
         appState.messagesBySession = {};
         appState.chatSessions = [];
         appState.sessionId = `fam-session-${Math.random().toString(36).slice(2, 8)}`;
-        localStorage.setItem(SESSION_KEY, appState.sessionId);
+        persistActiveSessionId(appState.sessionId);
         await loadFullState(true);
       } catch (err) {
         showBanner("setup-feedback", err.message, "error");
@@ -1457,7 +1624,7 @@
   async function switchChatSession(targetSessionId) {
     clearBanner("chat-feedback");
     appState.sessionId = targetSessionId;
-    localStorage.setItem(SESSION_KEY, targetSessionId);
+    persistActiveSessionId(targetSessionId);
     renderChatSessionsList();
     syncComposerControls();
     await loadSessionTranscript(targetSessionId);
@@ -1469,7 +1636,7 @@
     const newId = `fam-session-${Math.random().toString(36).slice(2, 8)}`;
     appState.sessionId = newId;
     appState.messagesBySession[newId] = [];
-    localStorage.setItem(SESSION_KEY, newId);
+    persistActiveSessionId(newId);
     renderActiveSessionMessages();
     renderChatSessionsList();
     syncComposerControls();
@@ -2345,30 +2512,6 @@
     });
   }
 
-  const shareLinkBtn = document.getElementById("btn-share-app-link");
-  if (shareLinkBtn) {
-    shareLinkBtn.addEventListener("click", async () => {
-      const shareUrl = `${window.location.origin}/`;
-      const famName = (appState.household && appState.household.household_name) || "Family Ops Concierge";
-      if (navigator.share) {
-        try {
-          await navigator.share({
-            title: famName,
-            text: `Link da nossa agenda e listas da família (${famName}):`,
-            url: shareUrl,
-          });
-          return;
-        } catch (_err) {
-          // User cancelled native share sheet or unsupported
-        }
-      }
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(shareUrl);
-        showBanner("setup-feedback", `Link copiado (${shareUrl})! Envie no WhatsApp para sua família.`, "success");
-      }
-    });
-  }
-
   // Auto-sync shared state across multiple family phones when unlocking or returning to the app
   let lastAutoSyncAt = Date.now();
   async function syncOnPhoneForeground() {
@@ -2387,7 +2530,7 @@
   document.addEventListener("visibilitychange", syncOnPhoneForeground);
   window.addEventListener("focus", syncOnPhoneForeground);
 
-  // Passcode Unlock Modal
+  // Admin PIN Unlock Modal
   document.getElementById("passcode-unlock-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const candidate = document.getElementById("unlock-passcode-input").value.trim();
@@ -2398,6 +2541,10 @@
     });
     if (resp.ok) {
       localStorage.setItem(PASSCODE_KEY, candidate);
+      localStorage.removeItem(MEMBER_TOKEN_KEY);
+      if (new URLSearchParams(window.location.search).has("m")) {
+        window.history.replaceState({}, "", window.location.pathname);
+      }
       document.getElementById("passcode-modal").classList.remove("visible");
       document.getElementById("passcode-error").classList.remove("visible");
       await loadFullState(true);

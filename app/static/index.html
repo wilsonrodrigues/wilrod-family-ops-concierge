@@ -10,13 +10,13 @@
   <meta name="apple-mobile-web-app-title" content="Family Ops" />
   <title>Family Ops Concierge - Agenda, Listas e Concierge IA</title>
   <meta name="description" content="Organize a agenda compartilhada da família, tarefas pendentes, lista de desejos e converse com o Concierge IA por texto, voz ou foto." />
-  <link rel="manifest" href="/static/manifest.json" />
+  <link rel="manifest" href="/manifest.json" />
   <link rel="icon" type="image/svg+xml" href="/static/icon.svg" />
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=0.8.2" />
+  <link rel="stylesheet" href="/static/styles.css?v=0.9.0" />
 </head>
 <body>
   <div class="app-shell">
@@ -26,7 +26,8 @@
         <div class="brand-titles">
           <div class="title-row">
             <h1 id="household-title">Family Ops Concierge</h1>
-            <button type="button" class="gear-btn" id="btn-open-setup" title="Configurações da Família" aria-label="Configurações da Família">
+            <span class="locked-user-pill" id="locked-user-pill"></span>
+            <button type="button" class="gear-btn" id="btn-open-setup" title="Configurações da Família (Admin)" aria-label="Configurações da Família (Admin)">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <circle cx="12" cy="12" r="3"></circle>
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
@@ -35,11 +36,6 @@
           </div>
           <p class="brand-subtitle" id="household-rules-summary">Agenda, Tarefas e Lista de Desejos</p>
         </div>
-      </div>
-
-      <div class="switcher-wrap" id="active-member-switcher" aria-label="Membro ativo da família">
-        <span class="switcher-label">Quem está aqui:</span>
-        <div class="member-pills" id="active-member-pills"></div>
       </div>
     </header>
 
@@ -269,16 +265,15 @@
       <section class="view-panel" id="view-setup">
         <div class="surface-card">
           <div class="onboarding-callout" id="setup-welcome-banner">
-            Bem-vindo ao Family Ops Concierge! Configure o nome da sua família e os membros abaixo para começar. Depois de salvar, o aplicativo abrirá direto no Concierge IA.
+            Bem-vindo! Configure o nome da família, seu PIN de Administrador e os membros abaixo. Depois, toque no ícone de compartilhar ao lado de cada familiar para enviar o link pessoal dele(a).
           </div>
 
           <div class="section-header">
             <div>
-              <h2>Configurar Sua Família</h2>
-              <p class="section-desc">Defina o nome da família, fuso horário, senha compartilhada opcional e os membros da casa.</p>
+              <h2>Configurar Sua Família (Admin)</h2>
+              <p class="section-desc">Apenas o administrador tem acesso a esta tela. Cada familiar recebe um link exclusivo.</p>
             </div>
             <div class="header-actions-group">
-              <button type="button" class="btn btn-secondary btn-sm" id="btn-share-app-link" title="Compartilhar link do aplicativo no celular">Compartilhar Link</button>
               <button type="button" class="btn btn-secondary btn-sm" id="btn-close-setup">Abrir Concierge IA</button>
             </div>
           </div>
@@ -290,6 +285,14 @@
               <div class="field-group">
                 <label for="cfg-name">Nome da Família</label>
                 <input type="text" id="cfg-name" required placeholder="ex.: Família Silva" />
+              </div>
+              <div class="field-group">
+                <label for="cfg-admin-member">Seu Perfil (Administrador)</label>
+                <select id="cfg-admin-member"></select>
+              </div>
+              <div class="field-group">
+                <label for="cfg-passcode" id="cfg-passcode-label">PIN do Administrador</label>
+                <input type="password" id="cfg-passcode" placeholder="Crie um PIN para proteger o painel Admin" />
               </div>
               <div class="field-group">
                 <label for="cfg-language">Idioma Padrão</label>
@@ -306,25 +309,21 @@
                 <label for="cfg-buffer">Antecedência p/ Esportes e Música (min)</label>
                 <input type="number" id="cfg-buffer" min="0" max="120" value="30" />
               </div>
-              <div class="field-group">
-                <label for="cfg-passcode">Senha Compartilhada da Família (opcional)</label>
-                <input type="password" id="cfg-passcode" placeholder="Deixe em branco para manter a atual" />
-              </div>
             </div>
 
             <div class="section-header">
               <div>
-                <h2>Membros da Família</h2>
-                <p class="section-desc">Cada membro ganha um botão rápido no topo da tela para alternar quem está falando.</p>
+                <h2>Membros da Família e Links Individuais</h2>
+                <p class="section-desc">Toque no botão de compartilhar ao lado de cada membro para enviar o link exclusivo dele(a) no WhatsApp.</p>
               </div>
-              <button type="button" class="btn btn-secondary" id="btn-add-member-row">+ Adicionar Membro</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-add-member-row">+ Membro</button>
             </div>
 
             <div id="setup-members-list"></div>
 
             <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; align-items: center;">
-              <button type="submit" class="btn btn-primary" id="btn-save-setup">Salvar e Abrir Concierge IA</button>
-              <button type="button" class="btn btn-secondary" id="btn-clear-passcode">Remover Senha</button>
+              <button type="submit" class="btn btn-primary" id="btn-save-setup">Salvar Configurações</button>
+              <button type="button" class="btn btn-secondary" id="btn-clear-passcode">Remover PIN</button>
               <button type="button" class="btn btn-ghost-danger" id="btn-reset-household" style="margin-left: auto;">Redefinir Família</button>
             </div>
           </form>
@@ -367,19 +366,19 @@
     </main>
   </div>
 
-  <!-- Household Passcode Unlock Modal -->
+  <!-- Admin / Restricted Household Access Modal -->
   <div class="modal-backdrop" id="passcode-modal" role="dialog" aria-modal="true" aria-labelledby="passcode-modal-title">
     <div class="modal-card">
-      <h2 id="passcode-modal-title" style="margin-top: 0;">Digite a Senha da Família</h2>
-      <p class="section-desc" style="margin-bottom: 14px;">Digite a senha compartilhada uma vez neste aparelho para desbloquear a agenda e as listas.</p>
-      <div class="feedback-banner error" id="passcode-error">Senha incorreta. Tente novamente.</div>
+      <h2 id="passcode-modal-title" style="margin-top: 0;">Acesso Restrito da Família</h2>
+      <p class="section-desc" style="margin-bottom: 14px;">Peça seu link pessoal de convite ao administrador da família, ou digite o PIN do Administrador abaixo:</p>
+      <div class="feedback-banner error" id="passcode-error">PIN incorreto. Tente novamente.</div>
       <form id="passcode-unlock-form" class="field-group">
-        <input type="password" id="unlock-passcode-input" placeholder="Senha da família" required />
-        <button type="submit" class="btn btn-primary" style="margin-top: 8px;">Desbloquear</button>
+        <input type="password" id="unlock-passcode-input" placeholder="PIN do Administrador" required />
+        <button type="submit" class="btn btn-primary" style="margin-top: 8px;">Entrar como Administrador</button>
       </form>
     </div>
   </div>
 
-  <script src="/static/app.js?v=0.8.2"></script>
+  <script src="/static/app.js?v=0.9.0"></script>
 </body>
 </html>

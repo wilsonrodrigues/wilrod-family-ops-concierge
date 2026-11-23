@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import dataclass
 from datetime import datetime
+import json
 import os
 from pathlib import Path
+import secrets
 from types import SimpleNamespace
 from typing import Any, Optional
 from urllib.parse import quote
@@ -14,8 +17,8 @@ import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from google.adk.errors.session_not_found_error import SessionNotFoundError
 from google.adk.runners import Runner
@@ -83,21 +86,98 @@ def _get_session_lock(session_id: str) -> asyncio.Lock:
 app = FastAPI(
     title="Family Ops Concierge",
     description="Shared Family Calendar, Multimodal Voice & Invitation Intake, Errands, Wishes, and ADK Concierge.",
-    version="0.8.2",
+    version="0.9.0",
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+ADMIN_COOKIE_NAME = "family_admin_auth"
+MEMBER_COOKIE_NAME = "family_member_token"
+COOKIE_MAX_AGE_SECONDS = 365 * 24 * 3600
 
 
-def require_household_auth(
+@dataclass
+class AuthContext:
+    """Resolved per-request caller identity ('admin' or 'member') and locked family member profile."""
+
+    access_mode: str  # "admin" | "member"
+    member: Optional[dict[str, Any]]
+
+    @property
+    def speaker_name(self) -> str:
+        return (self.member or {}).get("name") or "Família"
+
+    @property
+    def speaker_id(self) -> str:
+        return (self.member or {}).get("member_id") or "default"
+
+    @property
+    def speaker_filter(self) -> Optional[str]:
+        return self.member["name"] if self.member and self.member.get("name") else None
+
+
+def resolve_auth_context(
+    request: Request,
     x_household_passcode: Optional[str] = Header(default=""),
-) -> None:
-    """Enforces household passcode header when a passcode has been configured."""
-    if not store.verify_household_passcode(x_household_passcode or ""):
+    x_member_token: Optional[str] = Header(default=""),
+) -> AuthContext:
+    """Authenticates either a family Member via magic-link token or the household Admin via PIN/cookie."""
+    meta = store.get_household_auth_meta()
+    header_member_tok = (x_member_token or "").strip()
+
+    # 1. Explicit X-Member-Token header (personal magic link active in this tab/app)
+    if header_member_tok:
+        member = store.get_member_by_invite_token(header_member_tok)
+        if member is not None:
+            return AuthContext(access_mode="member", member=member)
         raise HTTPException(
             status_code=401,
-            detail="Invalid or missing household passcode.",
+            detail="Este link de convite não é mais válido. Peça um novo link ao administrador da família.",
         )
+
+    # 2. Admin PIN header or persistent HttpOnly Admin cookie
+    if meta["has_passcode"]:
+        candidate_pin = (x_household_passcode or "").strip()
+        cookie_admin = (request.cookies.get(ADMIN_COOKIE_NAME) or "").strip()
+        pin_ok = bool(candidate_pin) and store.verify_household_passcode(candidate_pin)
+        cookie_ok = (
+            bool(cookie_admin)
+            and bool(meta["admin_cookie_digest"])
+            and secrets.compare_digest(cookie_admin, meta["admin_cookie_digest"])
+        )
+        if pin_ok or cookie_ok:
+            return AuthContext(
+                access_mode="admin",
+                member=store.get_admin_member(meta["admin_member_id"]),
+            )
+
+    # 3. Persistent HttpOnly Member cookie (e.g. PWA Home Screen launch)
+    cookie_member_tok = (request.cookies.get(MEMBER_COOKIE_NAME) or "").strip()
+    if cookie_member_tok:
+        member = store.get_member_by_invite_token(cookie_member_tok)
+        if member is not None:
+            return AuthContext(access_mode="member", member=member)
+
+    # 4. First-time unconfigured onboarding OR PIN-free local/test mode
+    if not meta["is_configured"] or not meta["has_passcode"]:
+        return AuthContext(
+            access_mode="admin",
+            member=store.get_admin_member(meta["admin_member_id"]),
+        )
+
+    raise HTTPException(
+        status_code=401,
+        detail="Acesso restrito da família. Use seu link pessoal de convite ou desbloqueie como Administrador.",
+    )
+
+
+def require_admin_auth(auth: AuthContext = Depends(resolve_auth_context)) -> AuthContext:
+    """Restricts household configuration, Google Calendar OAuth, and invite-token management to Admin only."""
+    if auth.access_mode != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Apenas o administrador da família pode acessar ou alterar as configurações.",
+        )
+    return auth
 
 
 class PasscodeVerifyRequest(BaseModel):
@@ -118,6 +198,7 @@ class HouseholdSetupPayload(BaseModel):
     timezone: str = Field(default="America/Sao_Paulo")
     preferred_language: str = Field(default="pt-BR")
     sports_music_buffer_min: int = Field(default=30, ge=0, le=120)
+    admin_member_id: Optional[str] = Field(default=None)
     new_passcode: Optional[str] = Field(default=None)
     clear_passcode: bool = Field(default=False)
     members: list[MemberSetupItem] = Field(..., min_length=1)
@@ -230,57 +311,109 @@ def auth_status() -> dict[str, Any]:
 
 
 @app.post("/api/auth/verify")
-def auth_verify(payload: PasscodeVerifyRequest) -> dict[str, Any]:
+def auth_verify(payload: PasscodeVerifyRequest, response: Response) -> dict[str, Any]:
     ok = store.verify_household_passcode(payload.passcode)
     if not ok:
-        raise HTTPException(status_code=401, detail="Incorrect household passcode.")
-    return {"status": "ok"}
+        raise HTTPException(status_code=401, detail="PIN do Administrador incorreto.")
+    meta = store.get_household_auth_meta()
+    if meta["admin_cookie_digest"]:
+        response.set_cookie(
+            key=ADMIN_COOKIE_NAME,
+            value=meta["admin_cookie_digest"],
+            max_age=COOKIE_MAX_AGE_SECONDS,
+            httponly=True,
+            samesite="lax",
+        )
+    response.delete_cookie(key=MEMBER_COOKIE_NAME)
+    return {"status": "ok", "access_mode": "admin"}
 
 
-@app.get("/api/state", dependencies=[Depends(require_household_auth)])
-def get_full_state(request: Request, include_completed: bool = True) -> dict[str, Any]:
-    bundle = store.get_household_bundle()
+@app.get("/api/state")
+def get_full_state(
+    request: Request,
+    include_completed: bool = True,
+    auth: AuthContext = Depends(resolve_auth_context),
+) -> dict[str, Any]:
+    is_admin = auth.access_mode == "admin"
+    bundle = store.get_household_bundle(include_admin_secrets=is_admin)
+    full_gcal = gcal_sync.get_public_gcal_status(
+        redirect_uri_hint=_build_oauth_redirect_uri(request)
+    )
+    public_gcal = (
+        full_gcal
+        if is_admin
+        else {
+            "active_sync": full_gcal.get("active_sync", False),
+            "calendar_summary": full_gcal.get("calendar_summary", ""),
+        }
+    )
     return {
+        "access_mode": auth.access_mode,
+        "locked_member": auth.member,
         "household": bundle["household"],
         "members": bundle["members"],
         "events": gcal_sync.query_active_calendar_events(),
         "items": store.query_action_items(include_completed=include_completed),
         "memories": store.query_household_memories(limit=20),
-        "chat_sessions": store.list_chat_sessions(limit=40),
-        "gcal": gcal_sync.get_public_gcal_status(
-            redirect_uri_hint=_build_oauth_redirect_uri(request)
-        ),
+        "chat_sessions": store.list_chat_sessions(limit=40, created_by=auth.speaker_filter),
+        "gcal": public_gcal,
     }
 
 
-@app.get("/api/chat/sessions", dependencies=[Depends(require_household_auth)])
-def list_chat_sessions_endpoint(limit: int = 40) -> dict[str, Any]:
-    return {"sessions": store.list_chat_sessions(limit=limit)}
+@app.get("/api/chat/sessions")
+def list_chat_sessions_endpoint(
+    limit: int = 40,
+    auth: AuthContext = Depends(resolve_auth_context),
+) -> dict[str, Any]:
+    return {"sessions": store.list_chat_sessions(limit=limit, created_by=auth.speaker_filter)}
 
 
-@app.post("/api/chat/sessions", dependencies=[Depends(require_household_auth)])
-def create_chat_session_endpoint(payload: CreateChatSessionPayload) -> dict[str, Any]:
+@app.post("/api/chat/sessions")
+def create_chat_session_endpoint(
+    payload: CreateChatSessionPayload,
+    auth: AuthContext = Depends(resolve_auth_context),
+) -> dict[str, Any]:
     sid = (payload.session_id or "").strip() or f"fam-session-{uuid.uuid4().hex[:8]}"
-    created = store.ensure_chat_session(sid, created_by=payload.created_by, status="idle")
+    owner = (
+        auth.speaker_name
+        if auth.access_mode == "member" or not payload.created_by or payload.created_by == "Family"
+        else payload.created_by
+    )
+    created = store.ensure_chat_session(sid, created_by=owner, status="idle")
+    detail = store.get_chat_session_detail(sid, owner_name=owner)
     return {
         "session": created,
-        "messages": store.get_chat_session_detail(sid)["messages"],  # type: ignore[index]
-        "chat_sessions": store.list_chat_sessions(limit=40),
+        "messages": detail["messages"] if detail else [],
+        "chat_sessions": store.list_chat_sessions(limit=40, created_by=auth.speaker_filter),
     }
 
 
-@app.get("/api/chat/sessions/{session_id}", dependencies=[Depends(require_household_auth)])
-def get_chat_session_endpoint(session_id: str) -> dict[str, Any]:
-    detail = store.get_chat_session_detail(session_id)
-    if detail is None:
-        created = store.ensure_chat_session(session_id, status="idle")
-        return {"session": created, "messages": []}
-    return detail
+@app.get("/api/chat/sessions/{session_id}")
+def get_chat_session_endpoint(
+    session_id: str,
+    auth: AuthContext = Depends(resolve_auth_context),
+) -> dict[str, Any]:
+    existing_any = store.get_chat_session_detail(session_id)
+    if existing_any is not None:
+        owned = store.get_chat_session_detail(session_id, owner_name=auth.speaker_filter)
+        if owned is None:
+            raise HTTPException(status_code=403, detail="Esta conversa pertence a outro membro da família.")
+        return owned
+    created = store.ensure_chat_session(session_id, created_by=auth.speaker_name, status="idle")
+    return {"session": created, "messages": []}
 
 
-@app.delete("/api/chat/sessions/{session_id}", dependencies=[Depends(require_household_auth)])
-async def delete_chat_session_endpoint(session_id: str) -> dict[str, Any]:
-    store.delete_chat_session_record(session_id)
+@app.delete("/api/chat/sessions/{session_id}")
+async def delete_chat_session_endpoint(
+    session_id: str,
+    auth: AuthContext = Depends(resolve_auth_context),
+) -> dict[str, Any]:
+    existing_any = store.get_chat_session_detail(session_id)
+    if existing_any is not None:
+        owned = store.get_chat_session_detail(session_id, owner_name=auth.speaker_filter)
+        if owned is None:
+            raise HTTPException(status_code=403, detail="Esta conversa pertence a outro membro da família.")
+    store.delete_chat_session_record(session_id, owner_name=auth.speaker_filter)
     _SESSION_LOCKS.pop(session_id, None)
     try:
         await session_service.delete_session(
@@ -292,17 +425,23 @@ async def delete_chat_session_endpoint(session_id: str) -> dict[str, Any]:
         pass
     return {
         "status": "success",
-        "chat_sessions": store.list_chat_sessions(limit=40),
+        "chat_sessions": store.list_chat_sessions(limit=40, created_by=auth.speaker_filter),
     }
 
 
-@app.get("/api/memories", dependencies=[Depends(require_household_auth)])
-def get_memories_endpoint(q: Optional[str] = None) -> dict[str, Any]:
+@app.get("/api/memories")
+def get_memories_endpoint(
+    q: Optional[str] = None,
+    _auth: AuthContext = Depends(resolve_auth_context),
+) -> dict[str, Any]:
     return {"memories": store.query_household_memories(query=q, limit=25)}
 
 
-@app.get("/api/telemetry", dependencies=[Depends(require_household_auth)])
-def get_telemetry_endpoint(limit: int = 40) -> dict[str, Any]:
+@app.get("/api/telemetry")
+def get_telemetry_endpoint(
+    limit: int = 40,
+    _auth: AuthContext = Depends(require_admin_auth),
+) -> dict[str, Any]:
     """Exposes recent PII-redacted structured JSON INTENT/OUTCOME logs and OpenTelemetry trace spans."""
     return {
         "logs": get_recent_structured_logs(limit=limit),
@@ -310,8 +449,12 @@ def get_telemetry_endpoint(limit: int = 40) -> dict[str, Any]:
     }
 
 
-@app.put("/api/household/setup", dependencies=[Depends(require_household_auth)])
-def update_household_setup(payload: HouseholdSetupPayload) -> dict[str, Any]:
+@app.put("/api/household/setup")
+def update_household_setup(
+    payload: HouseholdSetupPayload,
+    response: Response,
+    _auth: AuthContext = Depends(require_admin_auth),
+) -> dict[str, Any]:
     saved = store.save_household_setup(
         household_name=payload.household_name,
         timezone_str=payload.timezone,
@@ -320,18 +463,53 @@ def update_household_setup(payload: HouseholdSetupPayload) -> dict[str, Any]:
         members=[m.model_dump() for m in payload.members],
         new_passcode=payload.new_passcode,
         clear_passcode=payload.clear_passcode,
+        admin_member_id=payload.admin_member_id,
     )
+    meta = store.get_household_auth_meta()
+    if meta["admin_cookie_digest"]:
+        response.set_cookie(
+            key=ADMIN_COOKIE_NAME,
+            value=meta["admin_cookie_digest"],
+            max_age=COOKIE_MAX_AGE_SECONDS,
+            httponly=True,
+            samesite="lax",
+        )
+    elif payload.clear_passcode:
+        response.delete_cookie(key=ADMIN_COOKIE_NAME)
     return {
         "status": "success",
+        "access_mode": "admin",
+        "locked_member": store.get_admin_member(meta["admin_member_id"]),
         "household": saved["household"],
         "members": saved["members"],
     }
 
 
-@app.post("/api/household/reset", dependencies=[Depends(require_household_auth)])
-def reset_household_endpoint() -> dict[str, Any]:
+@app.post("/api/members/{member_id}/regenerate-token")
+def regenerate_member_token_endpoint(
+    member_id: str,
+    _auth: AuthContext = Depends(require_admin_auth),
+) -> dict[str, Any]:
+    updated = store.regenerate_member_invite_token(member_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Membro da família não encontrado.")
+    bundle = store.get_household_bundle(include_admin_secrets=True)
+    return {
+        "status": "success",
+        "member": updated,
+        "members": bundle["members"],
+    }
+
+
+@app.post("/api/household/reset")
+def reset_household_endpoint(
+    response: Response,
+    _auth: AuthContext = Depends(require_admin_auth),
+) -> dict[str, Any]:
     reset_bundle = store.reset_household_to_new_user()
     _SESSION_LOCKS.clear()
+    response.delete_cookie(key=ADMIN_COOKIE_NAME)
+    response.delete_cookie(key=MEMBER_COOKIE_NAME)
     return {
         "status": "success",
         "household": reset_bundle["household"],
@@ -339,17 +517,21 @@ def reset_household_endpoint() -> dict[str, Any]:
     }
 
 
-@app.get("/api/gcal/status", dependencies=[Depends(require_household_auth)])
-def get_gcal_status_endpoint(request: Request) -> dict[str, Any]:
+@app.get("/api/gcal/status")
+def get_gcal_status_endpoint(
+    request: Request,
+    _auth: AuthContext = Depends(require_admin_auth),
+) -> dict[str, Any]:
     return gcal_sync.get_public_gcal_status(
         redirect_uri_hint=_build_oauth_redirect_uri(request)
     )
 
 
-@app.put("/api/gcal/config", dependencies=[Depends(require_household_auth)])
+@app.put("/api/gcal/config")
 def update_gcal_config_endpoint(
     payload: GoogleCalendarConfigPayload,
     request: Request,
+    _auth: AuthContext = Depends(require_admin_auth),
 ) -> dict[str, Any]:
     updates: dict[str, Any] = {}
 
@@ -401,7 +583,7 @@ def update_gcal_config_endpoint(
     }
 
 
-@app.get("/api/gcal/calendars", dependencies=[Depends(require_household_auth)])
+@app.get("/api/gcal/calendars", dependencies=[Depends(require_admin_auth)])
 def list_gcal_calendars_endpoint() -> dict[str, Any]:
     try:
         calendars = gcal_sync.list_writable_calendars()
@@ -410,7 +592,7 @@ def list_gcal_calendars_endpoint() -> dict[str, Any]:
     return {"calendars": calendars}
 
 
-@app.get("/api/gcal/oauth/start", dependencies=[Depends(require_household_auth)])
+@app.get("/api/gcal/oauth/start", dependencies=[Depends(require_admin_auth)])
 def start_gcal_oauth_endpoint(request: Request) -> dict[str, Any]:
     redirect_uri = _build_oauth_redirect_uri(request)
     try:
@@ -445,7 +627,7 @@ def complete_gcal_oauth_callback(
     return RedirectResponse(url="/?gcal_connected=1")
 
 
-@app.post("/api/gcal/disconnect", dependencies=[Depends(require_household_auth)])
+@app.post("/api/gcal/disconnect", dependencies=[Depends(require_admin_auth)])
 def disconnect_gcal_endpoint(request: Request) -> dict[str, Any]:
     store.save_gcal_integration_row(
         enabled=0,
@@ -462,10 +644,18 @@ def disconnect_gcal_endpoint(request: Request) -> dict[str, Any]:
     }
 
 
-@app.post("/api/events", dependencies=[Depends(require_household_auth)])
-def create_event_endpoint(payload: CreateEventPayload) -> dict[str, Any]:
+@app.post("/api/events")
+def create_event_endpoint(
+    payload: CreateEventPayload,
+    auth: AuthContext = Depends(resolve_auth_context),
+) -> dict[str, Any]:
+    effective_author = (
+        auth.speaker_name
+        if auth.access_mode == "member" or not payload.created_by or payload.created_by in ("Family", "Família")
+        else payload.created_by
+    )
     author_ctx = SimpleNamespace(
-        state={"active_member_name": payload.created_by},
+        state={"active_member_name": effective_author},
         tool_confirmation=None,
     )
     result = schedule_family_calendar_event(
@@ -483,11 +673,11 @@ def create_event_endpoint(payload: CreateEventPayload) -> dict[str, Any]:
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result)
 
-    result["event"]["created_by"] = payload.created_by
+    result["event"]["created_by"] = effective_author
     return result
 
 
-@app.delete("/api/events/{event_id}", dependencies=[Depends(require_household_auth)])
+@app.delete("/api/events/{event_id}", dependencies=[Depends(resolve_auth_context)])
 def remove_event_endpoint(event_id: str, delete_series: bool = False) -> dict[str, Any]:
     res = delete_family_calendar_event(
         event_id=event_id,
@@ -499,8 +689,16 @@ def remove_event_endpoint(event_id: str, delete_series: bool = False) -> dict[st
     return res
 
 
-@app.post("/api/items", dependencies=[Depends(require_household_auth)])
-def create_item_endpoint(payload: CreateItemPayload) -> dict[str, Any]:
+@app.post("/api/items")
+def create_item_endpoint(
+    payload: CreateItemPayload,
+    auth: AuthContext = Depends(resolve_auth_context),
+) -> dict[str, Any]:
+    effective_author = (
+        auth.speaker_name
+        if auth.access_mode == "member" or not payload.created_by or payload.created_by in ("Family", "Família")
+        else payload.created_by
+    )
     result = upsert_family_action_item(
         title=payload.title,
         item_type=payload.item_type,  # type: ignore[arg-type]
@@ -515,13 +713,13 @@ def create_item_endpoint(payload: CreateItemPayload) -> dict[str, Any]:
     with store._connect() as conn:
         conn.execute(
             "UPDATE action_items SET created_by = ? WHERE item_id = ?",
-            (payload.created_by, item["item_id"]),
+            (effective_author, item["item_id"]),
         )
-    item["created_by"] = payload.created_by
+    item["created_by"] = effective_author
     return result
 
 
-@app.patch("/api/items/{item_id}", dependencies=[Depends(require_household_auth)])
+@app.patch("/api/items/{item_id}", dependencies=[Depends(resolve_auth_context)])
 def patch_item_endpoint(item_id: str, payload: PatchItemPayload) -> dict[str, Any]:
     updated = store.toggle_or_delete_action_item(
         item_id=item_id,
@@ -628,6 +826,8 @@ async def _execute_runner_turn(
     session_id: str,
     new_message: types.Content,
     state_delta: Optional[dict[str, Any]] = None,
+    include_admin_secrets: bool = False,
+    speaker_filter: Optional[str] = None,
 ) -> dict[str, Any]:
     """Runs one ADK turn inside a root OpenTelemetry span and gathers state + traces."""
     reply_chunks: list[str] = []
@@ -708,7 +908,7 @@ async def _execute_runner_turn(
         )
 
     await asyncio.to_thread(sync_adk_session_db_backup)
-    bundle = store.get_household_bundle()
+    bundle = store.get_household_bundle(include_admin_secrets=include_admin_secrets)
     return {
         "reply": reply_text,
         "session_id": session_id,
@@ -722,15 +922,35 @@ async def _execute_runner_turn(
         "events": gcal_sync.query_active_calendar_events(),
         "items": store.query_action_items(include_completed=True),
         "memories": store.query_household_memories(limit=20),
-        "chat_sessions": store.list_chat_sessions(limit=40),
+        "chat_sessions": store.list_chat_sessions(limit=40, created_by=speaker_filter),
     }
 
 
-@app.post("/api/chat", dependencies=[Depends(require_household_auth)])
-async def chat_with_concierge(payload: ChatRequestPayload) -> dict[str, Any]:
+@app.post("/api/chat")
+async def chat_with_concierge(
+    payload: ChatRequestPayload,
+    auth: AuthContext = Depends(resolve_auth_context),
+) -> dict[str, Any]:
     raw_user_text = payload.message.strip()
     if not raw_user_text and not payload.attachments:
         raise HTTPException(status_code=400, detail="Envie uma mensagem, áudio ou imagem.")
+
+    effective_member_name = (
+        auth.speaker_name
+        if auth.access_mode == "member" or not payload.member_name or payload.member_name in ("Family", "Família")
+        else payload.member_name
+    )
+    effective_member_id = (
+        auth.speaker_id
+        if auth.access_mode == "member" or not payload.member_id
+        else payload.member_id
+    )
+
+    existing_sess = store.get_chat_session_detail(payload.session_id)
+    if existing_sess is not None:
+        owned_sess = store.get_chat_session_detail(payload.session_id, owner_name=effective_member_name)
+        if owned_sess is None:
+            raise HTTPException(status_code=403, detail="Esta conversa pertence a outro membro da família.")
 
     media_parts = _decode_media_parts(payload.attachments)
 
@@ -767,20 +987,20 @@ async def chat_with_concierge(payload: ChatRequestPayload) -> dict[str, Any]:
     store.ensure_chat_session(
         payload.session_id,
         first_prompt=display_user_text,
-        created_by=payload.member_name,
+        created_by=effective_member_name,
         status="running",
     )
     store.append_chat_message(
         payload.session_id,
         role="user",
         content=display_user_text,
-        speaker_name=payload.member_name,
-        speaker_avatar=payload.member_avatar,
+        speaker_name=effective_member_name,
+        speaker_avatar="",
         attachments_meta=attachments_meta,
     )
 
     contextual_prompt = (
-        f"[Active Family Member: {payload.member_name} | "
+        f"[Active Family Member: {effective_member_name} | "
         f"Current Local Date: {now_local.strftime('%Y-%m-%d (%A) %H:%M')}]\n"
         f"{user_text}"
     )
@@ -801,14 +1021,16 @@ async def chat_with_concierge(payload: ChatRequestPayload) -> dict[str, Any]:
             turn_result = await _execute_runner_turn(
                 operation_name="concierge.chat_request",
                 user_id=HOUSEHOLD_ADK_USER_ID,
-                member_name=payload.member_name,
+                member_name=effective_member_name,
                 session_id=payload.session_id,
                 new_message=content,
                 state_delta={
-                    "active_member_name": payload.member_name,
-                    "active_member_id": payload.member_id,
+                    "active_member_name": effective_member_name,
+                    "active_member_id": effective_member_id,
                     "routed_tier": route_hint.tier.value,
                 },
+                include_admin_secrets=(auth.access_mode == "admin"),
+                speaker_filter=auth.speaker_filter,
             )
             if store.get_chat_session_detail(payload.session_id) is None:
                 return turn_result
@@ -822,7 +1044,7 @@ async def chat_with_concierge(payload: ChatRequestPayload) -> dict[str, Any]:
                 pending_confirmations=turn_result["pending_confirmations"],
             )
             store.set_chat_session_status(payload.session_id, final_status)
-            turn_result["chat_sessions"] = store.list_chat_sessions(limit=40)
+            turn_result["chat_sessions"] = store.list_chat_sessions(limit=40, created_by=auth.speaker_filter)
             turn_result["session_messages"] = store.get_chat_session_detail(payload.session_id)["messages"]  # type: ignore[index]
             return turn_result
     except SessionNotFoundError as exc:
@@ -833,10 +1055,29 @@ async def chat_with_concierge(payload: ChatRequestPayload) -> dict[str, Any]:
             store.set_chat_session_status(payload.session_id, final_status)
 
 
-@app.post("/api/chat/confirm", dependencies=[Depends(require_household_auth)])
-async def confirm_concierge_tool(payload: ChatConfirmationPayload) -> dict[str, Any]:
+@app.post("/api/chat/confirm")
+async def confirm_concierge_tool(
+    payload: ChatConfirmationPayload,
+    auth: AuthContext = Depends(resolve_auth_context),
+) -> dict[str, Any]:
     """Resumes a paused ADK Human-in-the-Loop tool call with the user's Approve or Cancel decision."""
-    decision_label = f"{'✓ Aprovado' if payload.confirmed else '✕ Cancelado'} por {payload.member_name}"
+    effective_member_name = (
+        auth.speaker_name
+        if auth.access_mode == "member" or not payload.member_name or payload.member_name in ("Family", "Família")
+        else payload.member_name
+    )
+    effective_member_id = (
+        auth.speaker_id
+        if auth.access_mode == "member" or not payload.member_id
+        else payload.member_id
+    )
+    existing_sess = store.get_chat_session_detail(payload.session_id)
+    if existing_sess is not None:
+        owned_sess = store.get_chat_session_detail(payload.session_id, owner_name=effective_member_name)
+        if owned_sess is None:
+            raise HTTPException(status_code=403, detail="Esta conversa pertence a outro membro da família.")
+
+    decision_label = f"{'✓ Aprovado' if payload.confirmed else '✕ Cancelado'} por {effective_member_name}"
     store.resolve_message_confirmation(
         payload.session_id,
         payload.confirmation_call_id,
@@ -864,13 +1105,15 @@ async def confirm_concierge_tool(payload: ChatConfirmationPayload) -> dict[str, 
             turn_result = await _execute_runner_turn(
                 operation_name="concierge.confirm_request",
                 user_id=HOUSEHOLD_ADK_USER_ID,
-                member_name=payload.member_name,
+                member_name=effective_member_name,
                 session_id=payload.session_id,
                 new_message=confirmation_content,
                 state_delta={
-                    "active_member_name": payload.member_name,
-                    "active_member_id": payload.member_id,
+                    "active_member_name": effective_member_name,
+                    "active_member_id": effective_member_id,
                 },
+                include_admin_secrets=(auth.access_mode == "admin"),
+                speaker_filter=auth.speaker_filter,
             )
             if store.get_chat_session_detail(payload.session_id) is None:
                 return turn_result
@@ -884,7 +1127,7 @@ async def confirm_concierge_tool(payload: ChatConfirmationPayload) -> dict[str, 
                 pending_confirmations=turn_result["pending_confirmations"],
             )
             store.set_chat_session_status(payload.session_id, final_status)
-            turn_result["chat_sessions"] = store.list_chat_sessions(limit=40)
+            turn_result["chat_sessions"] = store.list_chat_sessions(limit=40, created_by=auth.speaker_filter)
             turn_result["session_messages"] = store.get_chat_session_detail(payload.session_id)["messages"]  # type: ignore[index]
             return turn_result
     except SessionNotFoundError as exc:
@@ -898,6 +1141,31 @@ async def confirm_concierge_tool(payload: ChatConfirmationPayload) -> dict[str, 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+@app.get("/manifest.json")
+def serve_dynamic_manifest(request: Request, m: Optional[str] = None) -> JSONResponse:
+    """Serves PWA manifest, embedding the member's personal invite token into `start_url` when present."""
+    manifest_data = json.loads((STATIC_DIR / "manifest.json").read_text(encoding="utf-8"))
+    tok = (m or request.cookies.get(MEMBER_COOKIE_NAME) or "").strip()
+    if tok and store.get_member_by_invite_token(tok) is not None:
+        manifest_data["start_url"] = f"/?m={quote(tok)}"
+    return JSONResponse(manifest_data)
+
+
 @app.get("/")
-def serve_index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+def serve_index(
+    m: Optional[str] = None,
+    admin: Optional[str] = None,
+) -> FileResponse:
+    resp = FileResponse(STATIC_DIR / "index.html")
+    tok = (m or "").strip()
+    if tok and store.get_member_by_invite_token(tok) is not None:
+        resp.set_cookie(
+            key=MEMBER_COOKIE_NAME,
+            value=tok,
+            max_age=COOKIE_MAX_AGE_SECONDS,
+            httponly=True,
+            samesite="lax",
+        )
+    elif admin == "1":
+        resp.delete_cookie(key=MEMBER_COOKIE_NAME)
+    return resp

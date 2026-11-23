@@ -130,6 +130,23 @@ main,
   text-overflow: ellipsis;
 }
 
+.locked-user-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-accent-soft);
+  color: var(--brand-primary);
+  font-size: 0.76rem;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.locked-user-pill:empty {
+  display: none;
+}
+
 .gear-btn {
   appearance: none;
   border: 1px solid var(--border-hairline);
@@ -142,6 +159,7 @@ main,
   place-items: center;
   cursor: pointer;
   padding: 0;
+  flex-shrink: 0;
   transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
 
@@ -1463,7 +1481,7 @@ textarea:focus {
 
 .member-editor-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 148px 34px;
+  grid-template-columns: minmax(0, 1fr) 146px 34px 34px;
   gap: 8px;
   align-items: center;
   padding: 8px 10px;
@@ -1473,6 +1491,32 @@ textarea:focus {
   margin-bottom: 8px;
   max-width: 100%;
   min-width: 0;
+}
+
+.m-share-btn {
+  appearance: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid hsl(167, 42%, 76%);
+  background: var(--bg-accent-soft);
+  color: var(--brand-primary);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease, transform 0.12s ease;
+}
+
+.m-share-btn:hover {
+  background: var(--brand-primary);
+  color: #ffffff;
+  border-color: var(--brand-primary);
+}
+
+.m-share-btn:active {
+  transform: scale(0.95);
 }
 
 .m-remove-btn {
@@ -1786,16 +1830,21 @@ textarea:focus {
     min-width: 0;
   }
 
-  /* Single-line family member row on mobile: Name + Relation dropdown + compact ✕ button */
+  /* Single-line family member row on mobile: Name + Relation dropdown + Share icon + ✕ button */
   .member-editor-row {
-    grid-template-columns: minmax(0, 1fr) 114px 30px;
-    gap: 6px;
+    grid-template-columns: minmax(0, 1fr) 106px 32px 30px;
+    gap: 5px;
     padding: 6px 8px;
   }
 
   .member-editor-row input.m-name,
   .member-editor-row select.m-role {
-    padding: 7px 8px;
+    padding: 7px 6px;
+  }
+
+  .m-share-btn {
+    width: 32px;
+    height: 32px;
   }
 
   .m-remove-btn {

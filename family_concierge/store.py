@@ -7,6 +7,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import secrets
 import shutil
 import sqlite3
 import tempfile
@@ -316,6 +317,27 @@ def init_db() -> None:
         if "is_all_day" not in existing_cols:
             conn.execute("ALTER TABLE calendar_events ADD COLUMN is_all_day INTEGER NOT NULL DEFAULT 0")
 
+        hh_cols = {
+            r["name"] for r in conn.execute("PRAGMA table_info(household_config)").fetchall()
+        }
+        if "admin_member_id" not in hh_cols:
+            conn.execute("ALTER TABLE household_config ADD COLUMN admin_member_id TEXT NOT NULL DEFAULT ''")
+
+        member_cols = {
+            r["name"] for r in conn.execute("PRAGMA table_info(family_members)").fetchall()
+        }
+        if "invite_token" not in member_cols:
+            conn.execute("ALTER TABLE family_members ADD COLUMN invite_token TEXT NOT NULL DEFAULT ''")
+
+        missing_token_rows = conn.execute(
+            "SELECT member_id FROM family_members WHERE invite_token IS NULL OR invite_token = ''"
+        ).fetchall()
+        for mr in missing_token_rows:
+            conn.execute(
+                "UPDATE family_members SET invite_token = ? WHERE member_id = ?",
+                (secrets.token_urlsafe(18), mr["member_id"]),
+            )
+
         now_iso = datetime.now(timezone.utc).isoformat()
         seed = _load_seed_fixture()
 
@@ -372,17 +394,18 @@ def init_db() -> None:
                 conn.execute(
                     """
                     INSERT INTO family_members (
-                        member_id, name, role, avatar, color, email, routine_notes, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        member_id, name, role, avatar, color, email, routine_notes, invite_token, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         m["member_id"],
                         m["name"],
                         m.get("role", "Parent"),
-                        m.get("avatar", "🙂"),
+                        m.get("avatar", ""),
                         m.get("color", "#1b6b5a"),
                         m.get("email", ""),
                         m.get("routine_notes", ""),
+                        secrets.token_urlsafe(18),
                         m.get("created_at", now_iso),
                     ),
                 )
@@ -482,6 +505,7 @@ def reset_household_to_new_user() -> dict[str, Any]:
                 timezone = 'America/Sao_Paulo',
                 preferred_language = 'pt-BR',
                 passcode_hash = '',
+                admin_member_id = '',
                 sports_music_buffer_min = 30,
                 is_configured = 0,
                 updated_at = ?
@@ -492,7 +516,7 @@ def reset_household_to_new_user() -> dict[str, Any]:
     return get_household_bundle()
 
 
-def get_household_bundle() -> dict[str, Any]:
+def get_household_bundle(include_admin_secrets: bool = False) -> dict[str, Any]:
     """Returns household settings (without passcode_hash) and ordered family members."""
     init_db()
     with _connect() as conn:
@@ -500,13 +524,94 @@ def get_household_bundle() -> dict[str, Any]:
         has_passcode = bool(cfg.pop("passcode_hash", ""))
         cfg["has_passcode"] = has_passcode
         cfg["is_configured"] = bool(cfg["is_configured"])
-        members = [
+        raw_members = [
             dict(r)
             for r in conn.execute(
                 "SELECT * FROM family_members ORDER BY CASE role WHEN 'Parent' THEN 1 WHEN 'Teen' THEN 2 WHEN 'Child' THEN 3 ELSE 4 END, created_at ASC"
             ).fetchall()
         ]
-    return {"household": cfg, "members": members}
+    if not include_admin_secrets:
+        cfg.pop("admin_member_id", None)
+        for m in raw_members:
+            m.pop("invite_token", None)
+    else:
+        if not cfg.get("admin_member_id") and raw_members:
+            cfg["admin_member_id"] = raw_members[0]["member_id"]
+    return {"household": cfg, "members": raw_members}
+
+
+def get_household_auth_meta() -> dict[str, Any]:
+    """Returns internal household authentication metadata for server-side access checks."""
+    init_db()
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM household_config WHERE id = 1").fetchone()
+        if row is None:
+            return {
+                "is_configured": False,
+                "has_passcode": False,
+                "passcode_hash": "",
+                "admin_cookie_digest": "",
+                "admin_member_id": "",
+            }
+        d = dict(row)
+        ph = str(d.get("passcode_hash") or "")
+        cookie_digest = (
+            hashlib.sha256(f"family-ops-admin:{ph}".encode("utf-8")).hexdigest() if ph else ""
+        )
+        return {
+            "is_configured": bool(d.get("is_configured")),
+            "has_passcode": bool(ph),
+            "passcode_hash": ph,
+            "admin_cookie_digest": cookie_digest,
+            "admin_member_id": str(d.get("admin_member_id") or ""),
+        }
+
+
+def get_admin_member(preferred_member_id: str = "") -> Optional[dict[str, Any]]:
+    """Resolves the family member profile associated with the household Admin."""
+    bundle = get_household_bundle(include_admin_secrets=False)
+    members = bundle["members"]
+    if not members:
+        return None
+    if preferred_member_id:
+        for m in members:
+            if m["member_id"] == preferred_member_id:
+                return m
+    return members[0]
+
+
+def get_member_by_invite_token(token: str) -> Optional[dict[str, Any]]:
+    """Looks up a single family member by their secret `invite_token` (returns public member dict or None)."""
+    cleaned = (token or "").strip()
+    if len(cleaned) < 10:
+        return None
+    init_db()
+    with _connect() as conn:
+        rows = conn.execute("SELECT * FROM family_members WHERE invite_token != ''").fetchall()
+    for r in rows:
+        d = dict(r)
+        tok = str(d.pop("invite_token", "") or "")
+        if tok and secrets.compare_digest(tok, cleaned):
+            return d
+    return None
+
+
+def regenerate_member_invite_token(member_id: str) -> Optional[dict[str, Any]]:
+    """Rotates the secret `invite_token` for `member_id`, invalidating previous invite links."""
+    init_db()
+    new_tok = secrets.token_urlsafe(18)
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE family_members SET invite_token = ? WHERE member_id = ?",
+            (new_tok, member_id.strip()),
+        )
+        if cur.rowcount == 0:
+            return None
+        row = conn.execute(
+            "SELECT * FROM family_members WHERE member_id = ?",
+            (member_id.strip(),),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def verify_household_passcode(candidate: str) -> bool:
@@ -517,7 +622,7 @@ def verify_household_passcode(candidate: str) -> bool:
         stored = row["passcode_hash"] if row else ""
     if not stored:
         return True
-    return hash_passcode(candidate or "") == stored
+    return secrets.compare_digest(hash_passcode(candidate or ""), stored)
 
 
 def save_household_setup(
@@ -528,17 +633,67 @@ def save_household_setup(
     members: list[dict[str, Any]],
     new_passcode: Optional[str] = None,
     clear_passcode: bool = False,
+    admin_member_id: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Persists complete household configuration and replaces/updates member roster."""
+    """Persists complete household configuration, preserves/generates member invite tokens, and returns Admin bundle."""
     init_db()
     now_iso = datetime.now(timezone.utc).isoformat()
     with _connect() as conn:
-        existing = conn.execute("SELECT passcode_hash FROM household_config WHERE id = 1").fetchone()
+        existing = conn.execute(
+            "SELECT passcode_hash, admin_member_id FROM household_config WHERE id = 1"
+        ).fetchone()
         passcode_hash = existing["passcode_hash"] if existing else ""
+        prev_admin_id = existing["admin_member_id"] if existing else ""
         if clear_passcode:
             passcode_hash = ""
         elif new_passcode is not None and new_passcode.strip():
             passcode_hash = hash_passcode(new_passcode)
+
+        # Map existing invite tokens by member_id (and lowercase name fallback) so saving setup never breaks active links
+        existing_tokens_by_id: dict[str, str] = {}
+        existing_tokens_by_name: dict[str, str] = {}
+        for er in conn.execute("SELECT member_id, name, invite_token FROM family_members").fetchall():
+            if er["invite_token"]:
+                existing_tokens_by_id[er["member_id"]] = er["invite_token"]
+                existing_tokens_by_name[er["name"].strip().lower()] = er["invite_token"]
+
+        prepared_members: list[tuple[str, str, str, str, str, str, str, str, str]] = []
+        if members:
+            conn.execute("DELETE FROM family_members")
+            for m in members:
+                m_name = m["name"].strip()
+                m_id = (m.get("member_id") or "").strip() or f"mem-{uuid.uuid4().hex[:8]}"
+                m_tok = (
+                    existing_tokens_by_id.get(m_id)
+                    or existing_tokens_by_name.get(m_name.lower())
+                    or secrets.token_urlsafe(18)
+                )
+                prepared_members.append(
+                    (
+                        m_id,
+                        m_name,
+                        (m.get("role") or "Parent").strip(),
+                        (m.get("avatar") or "").strip(),
+                        (m.get("color") or "#1b6b5a").strip(),
+                        (m.get("email") or "").strip(),
+                        (m.get("routine_notes") or "").strip(),
+                        m_tok,
+                        now_iso,
+                    )
+                )
+                conn.execute(
+                    """
+                    INSERT INTO family_members (
+                        member_id, name, role, avatar, color, email, routine_notes, invite_token, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    prepared_members[-1],
+                )
+
+        valid_ids = {pm[0] for pm in prepared_members}
+        chosen_admin_id = (admin_member_id or "").strip() or prev_admin_id
+        if chosen_admin_id not in valid_ids:
+            chosen_admin_id = prepared_members[0][0] if prepared_members else ""
 
         conn.execute(
             """
@@ -547,6 +702,7 @@ def save_household_setup(
                 timezone = ?,
                 preferred_language = ?,
                 passcode_hash = ?,
+                admin_member_id = ?,
                 sports_music_buffer_min = ?,
                 is_configured = 1,
                 updated_at = ?
@@ -557,33 +713,12 @@ def save_household_setup(
                 timezone_str.strip() or "America/Sao_Paulo",
                 preferred_language.strip() or "pt-BR",
                 passcode_hash,
+                chosen_admin_id,
                 int(sports_music_buffer_min),
                 now_iso,
             ),
         )
-
-        if members:
-            conn.execute("DELETE FROM family_members")
-            for m in members:
-                m_id = (m.get("member_id") or "").strip() or f"mem-{uuid.uuid4().hex[:8]}"
-                conn.execute(
-                    """
-                    INSERT INTO family_members (
-                        member_id, name, role, avatar, color, email, routine_notes, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        m_id,
-                        m["name"].strip(),
-                        (m.get("role") or "Parent").strip(),
-                        (m.get("avatar") or "").strip(),
-                        (m.get("color") or "#1b6b5a").strip(),
-                        (m.get("email") or "").strip(),
-                        (m.get("routine_notes") or "").strip(),
-                        now_iso,
-                    ),
-                )
-    return get_household_bundle()
+    return get_household_bundle(include_admin_secrets=True)
 
 
 def upsert_member_row(
@@ -620,13 +755,24 @@ def upsert_member_row(
             conn.execute(
                 """
                 INSERT INTO family_members (
-                    member_id, name, role, avatar, color, email, routine_notes, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    member_id, name, role, avatar, color, email, routine_notes, invite_token, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (m_id, name.strip(), role, avatar, color, email.strip(), routine_notes.strip(), now_iso),
+                (
+                    m_id,
+                    name.strip(),
+                    role,
+                    avatar,
+                    color,
+                    email.strip(),
+                    routine_notes.strip(),
+                    secrets.token_urlsafe(18),
+                    now_iso,
+                ),
             )
         conn.execute("UPDATE household_config SET is_configured = 1, updated_at = ? WHERE id = 1", (now_iso,))
         saved = dict(conn.execute("SELECT * FROM family_members WHERE member_id = ?", (m_id,)).fetchone())
+        saved.pop("invite_token", None)
     return saved
 
 
@@ -1063,39 +1209,71 @@ def _deserialize_chat_message_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def list_chat_sessions(limit: int = 40) -> list[dict[str, Any]]:
-    """Lists chat sessions ordered by most recent activity with message counts and previews."""
+def list_chat_sessions(limit: int = 40, created_by: Optional[str] = None) -> list[dict[str, Any]]:
+    """Lists chat sessions ordered by most recent activity, optionally scoped to a single family member."""
     init_db()
     safe_limit = max(1, min(int(limit), 100))
+    owner = (created_by or "").strip()
     with _connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                s.session_id,
-                s.title,
-                s.created_by,
-                s.status,
-                s.created_at,
-                s.updated_at,
-                COUNT(m.message_id) AS message_count,
-                COALESCE(
-                    (
-                        SELECT m2.content
-                        FROM chat_messages m2
-                        WHERE m2.session_id = s.session_id
-                        ORDER BY m2.created_at DESC, m2.rowid DESC
-                        LIMIT 1
-                    ),
-                    ''
-                ) AS last_preview
-            FROM chat_sessions s
-            LEFT JOIN chat_messages m ON m.session_id = s.session_id
-            GROUP BY s.session_id
-            ORDER BY s.updated_at DESC
-            LIMIT ?
-            """,
-            (safe_limit,),
-        ).fetchall()
+        if owner:
+            rows = conn.execute(
+                """
+                SELECT
+                    s.session_id,
+                    s.title,
+                    s.created_by,
+                    s.status,
+                    s.created_at,
+                    s.updated_at,
+                    COUNT(m.message_id) AS message_count,
+                    COALESCE(
+                        (
+                            SELECT m2.content
+                            FROM chat_messages m2
+                            WHERE m2.session_id = s.session_id
+                            ORDER BY m2.created_at DESC, m2.rowid DESC
+                            LIMIT 1
+                        ),
+                        ''
+                    ) AS last_preview
+                FROM chat_sessions s
+                LEFT JOIN chat_messages m ON m.session_id = s.session_id
+                WHERE LOWER(s.created_by) = LOWER(?)
+                GROUP BY s.session_id
+                ORDER BY s.updated_at DESC
+                LIMIT ?
+                """,
+                (owner, safe_limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT
+                    s.session_id,
+                    s.title,
+                    s.created_by,
+                    s.status,
+                    s.created_at,
+                    s.updated_at,
+                    COUNT(m.message_id) AS message_count,
+                    COALESCE(
+                        (
+                            SELECT m2.content
+                            FROM chat_messages m2
+                            WHERE m2.session_id = s.session_id
+                            ORDER BY m2.created_at DESC, m2.rowid DESC
+                            LIMIT 1
+                        ),
+                        ''
+                    ) AS last_preview
+                FROM chat_sessions s
+                LEFT JOIN chat_messages m ON m.session_id = s.session_id
+                GROUP BY s.session_id
+                ORDER BY s.updated_at DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
     result: list[dict[str, Any]] = []
     for r in rows:
         d = dict(r)
@@ -1105,15 +1283,21 @@ def list_chat_sessions(limit: int = 40) -> list[dict[str, Any]]:
     return result
 
 
-def get_chat_session_detail(session_id: str) -> Optional[dict[str, Any]]:
+def get_chat_session_detail(
+    session_id: str,
+    owner_name: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
     """Returns session metadata and full chronological message transcript for `session_id`."""
     init_db()
+    owner = (owner_name or "").strip()
     with _connect() as conn:
         s_row = conn.execute(
             "SELECT * FROM chat_sessions WHERE session_id = ?",
             (session_id,),
         ).fetchone()
         if s_row is None:
+            return None
+        if owner and str(s_row["created_by"] or "").strip().lower() not in (owner.lower(), "family"):
             return None
         m_rows = conn.execute(
             "SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC",
@@ -1125,11 +1309,18 @@ def get_chat_session_detail(session_id: str) -> Optional[dict[str, Any]]:
     }
 
 
-def delete_chat_session_record(session_id: str) -> bool:
-    """Deletes a chat session and all its messages from SQLite."""
+def delete_chat_session_record(session_id: str, owner_name: Optional[str] = None) -> bool:
+    """Deletes a chat session and all its messages from SQLite (enforcing `owner_name` if provided)."""
     init_db()
+    owner = (owner_name or "").strip()
     with _connect() as conn:
-        cur = conn.execute("DELETE FROM chat_sessions WHERE session_id = ?", (session_id,))
+        if owner:
+            cur = conn.execute(
+                "DELETE FROM chat_sessions WHERE session_id = ? AND LOWER(created_by) IN (LOWER(?), 'family')",
+                (session_id, owner),
+            )
+        else:
+            cur = conn.execute("DELETE FROM chat_sessions WHERE session_id = ?", (session_id,))
         return cur.rowcount > 0
 
 

@@ -674,3 +674,108 @@ def test_clean_new_user_bootstrap_and_past_date_filtering(
     upcoming = store.query_events()
     assert len(upcoming) == 1
     assert upcoming[0]["title"] == "[All] Future Event"
+
+
+def test_admin_vs_member_magic_links_and_private_chats(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verifies Admin PIN setup, secret per-member magic links, 403 Admin guards, and private chat isolation."""
+    fresh_db = tmp_path / "admin_member_modes.db"
+    monkeypatch.setenv("FAMILY_OPS_DB_PATH", str(fresh_db))
+    monkeypatch.delenv("FAMILY_OPS_LOAD_SEED", raising=False)
+    monkeypatch.setenv("USE_SECRET_MANAGER", "0")
+
+    from app.server import app as fastapi_app
+
+    admin_client = TestClient(fastapi_app)
+    setup_resp = admin_client.put(
+        "/api/household/setup",
+        json={
+            "household_name": "Casa Silva",
+            "preferred_language": "pt-BR",
+            "timezone": "America/Sao_Paulo",
+            "sports_music_buffer_min": 30,
+            "admin_member_id": "mem-admin-1",
+            "new_passcode": "7788",
+            "members": [
+                {"member_id": "mem-admin-1", "name": "AdminParent", "role": "Parent"},
+                {"member_id": "mem-spouse-2", "name": "SpouseParent", "role": "Parent"},
+            ],
+        },
+    )
+    assert setup_resp.status_code == 200
+    setup_data = setup_resp.json()
+    assert setup_data["access_mode"] == "admin"
+    assert setup_data["locked_member"]["name"] == "AdminParent"
+
+    spouse_record = next(m for m in setup_data["members"] if m["name"] == "SpouseParent")
+    spouse_token = spouse_record["invite_token"]
+    assert len(spouse_token) >= 16
+
+    # 1. Anonymous visitor without Admin PIN or Member invite link is blocked (401)
+    stranger_client = TestClient(fastapi_app)
+    assert stranger_client.get("/api/state").status_code == 401
+
+    # 2. Spouse opens personal magic link /?m=<token>: sets cookie + dynamic PWA manifest start_url
+    spouse_client = TestClient(fastapi_app)
+    landing = spouse_client.get(f"/?m={spouse_token}")
+    assert landing.status_code == 200
+    manifest_resp = spouse_client.get("/manifest.json")
+    assert manifest_resp.status_code == 200
+    assert manifest_resp.json()["start_url"] == f"/?m={spouse_token}"
+
+    spouse_state = spouse_client.get("/api/state").json()
+    assert spouse_state["access_mode"] == "member"
+    assert spouse_state["locked_member"]["name"] == "SpouseParent"
+    assert all("invite_token" not in m for m in spouse_state["members"])
+    assert "connected_email" not in spouse_state["gcal"]
+
+    # 3. Member cannot access or mutate Family Configuration or Google Calendar settings (403)
+    assert (
+        spouse_client.put(
+            "/api/household/setup",
+            json={
+                "household_name": "Hacked",
+                "members": [{"name": "SpouseParent", "role": "Parent"}],
+            },
+        ).status_code
+        == 403
+    )
+    assert spouse_client.post("/api/household/reset").status_code == 403
+    assert spouse_client.put("/api/gcal/config", json={"enabled": False}).status_code == 403
+    assert spouse_client.get("/api/telemetry").status_code == 403
+
+    # 4. Lists & Calendar are shared, while AI Concierge chat threads are private per member
+    admin_client.post(
+        "/api/items",
+        json={"title": "Comprar cafe", "item_type": "NEED_TO_DO", "assigned_to": "Anyone"},
+    )
+    spouse_item_resp = spouse_client.post(
+        "/api/items",
+        json={
+            "title": "Ir ao cinema",
+            "item_type": "WANT_TO_DO",
+            "assigned_to": "Anyone",
+            "created_by": "AdminParent",  # Spoofed author must be overridden to SpouseParent
+        },
+    )
+    assert spouse_item_resp.status_code == 200
+    assert spouse_item_resp.json()["item"]["created_by"] == "SpouseParent"
+
+    admin_client.post("/api/chat/sessions", json={"session_id": "sess-admin-only"})
+    spouse_client.post("/api/chat/sessions", json={"session_id": "sess-spouse-only"})
+
+    spouse_after = spouse_client.get("/api/state").json()
+    assert len(spouse_after["items"]) == 2
+    assert [s["session_id"] for s in spouse_after["chat_sessions"]] == ["sess-spouse-only"]
+    assert spouse_client.get("/api/chat/sessions/sess-admin-only").status_code == 403
+    assert spouse_client.delete("/api/chat/sessions/sess-admin-only").status_code == 403
+
+    # 5. Token rotation immediately revokes the old invite link
+    rot_resp = admin_client.post("/api/members/mem-spouse-2/regenerate-token")
+    assert rot_resp.status_code == 200
+    new_token = rot_resp.json()["member"]["invite_token"]
+    assert new_token != spouse_token
+    assert spouse_client.get("/api/state", headers={"X-Member-Token": spouse_token}).status_code == 401
+    assert spouse_client.get("/api/state", headers={"X-Member-Token": new_token}).status_code == 200
