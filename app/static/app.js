@@ -56,7 +56,7 @@
 
   function getActiveMember() {
     const found = appState.members.find((m) => m.member_id === appState.activeMemberId);
-    return found || appState.members[0] || { member_id: "default", name: "Família", avatar: "🙂" };
+    return found || appState.members[0] || { member_id: "default", name: "Família", avatar: "" };
   }
 
   function switchTab(targetId) {
@@ -218,7 +218,7 @@
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = `member-pill ${m.member_id === active.member_id ? "active" : ""}`;
-      btn.textContent = `${m.avatar || "🙂"} ${m.name}`;
+      btn.textContent = m.name;
       btn.addEventListener("click", () => {
         appState.activeMemberId = m.member_id;
         appState.selectedEventParticipants = [m.name];
@@ -229,7 +229,7 @@
     });
 
     document.getElementById("chat-speaker-indicator").textContent =
-      appState.members.length ? `${active.avatar || "🙂"} ${active.name}` : "";
+      appState.members.length ? active.name : "";
 
     if (!appState.selectedEventParticipants.length && active.name) {
       appState.selectedEventParticipants = [active.name];
@@ -242,7 +242,7 @@
       appState.members.forEach((m) => {
         const opt = document.createElement("option");
         opt.value = m.name;
-        opt.textContent = `${m.avatar || ""} ${m.name}`;
+        opt.textContent = m.name;
         assignSelect.appendChild(opt);
       });
       if (prevVal && Array.from(assignSelect.options).some((o) => o.value === prevVal)) {
@@ -272,7 +272,7 @@
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = `filter-chip ${selected ? "active" : ""}`;
-      btn.textContent = `${m.avatar || ""} [${m.name}]`;
+      btn.textContent = `[${m.name}]`;
       btn.addEventListener("click", () => {
         let next = appState.selectedEventParticipants.filter((p) => p !== "All");
         if (next.includes(m.name)) {
@@ -339,7 +339,7 @@
       const chip = document.createElement("button");
       chip.type = "button";
       chip.className = `filter-chip ${appState.calendarFilter === m.name ? "active" : ""}`;
-      chip.textContent = `${m.avatar || ""} ${m.name}`;
+      chip.textContent = m.name;
       chip.addEventListener("click", () => {
         appState.calendarFilter = m.name;
         renderCalendar();
@@ -535,7 +535,7 @@
     if (appState.members.length > 0) {
       appState.members.forEach((m) => appendMemberSetupRow(m));
     } else {
-      appendMemberSetupRow({ avatar: "🙂", role: "Parent" });
+      appendMemberSetupRow({ role: "Parent" });
     }
 
     renderGcalSetupCard();
@@ -617,15 +617,14 @@
     row.dataset.memberId = member.member_id || "";
 
     row.innerHTML = `
-      <input type="text" class="m-avatar" value="${escapeAttr(member.avatar || "🙂")}" maxlength="4" title="Emoji / avatar" />
-      <input type="text" class="m-name" value="${escapeAttr(member.name || "")}" placeholder="Nome do membro (ex.: Lucas)" required />
-      <select class="m-role">
+      <input type="text" class="m-name" value="${escapeAttr(member.name || "")}" placeholder="Nome (ex.: Lucas)" required />
+      <select class="m-role" aria-label="Relação familiar">
         <option value="Parent" ${member.role === "Parent" ? "selected" : ""}>Pai / Mãe</option>
         <option value="Teen" ${member.role === "Teen" ? "selected" : ""}>Adolescente</option>
         <option value="Child" ${member.role === "Child" ? "selected" : ""}>Criança</option>
         <option value="Relative" ${member.role === "Relative" ? "selected" : ""}>Familiar</option>
       </select>
-      <button type="button" class="btn btn-ghost-danger m-remove">Remover</button>
+      <button type="button" class="m-remove-btn m-remove" title="Remover membro" aria-label="Remover membro">✕</button>
     `;
 
     row.querySelector(".m-remove").addEventListener("click", () => {
@@ -982,7 +981,6 @@
     return rows
       .map((r) => ({
         member_id: r.dataset.memberId || null,
-        avatar: r.querySelector(".m-avatar").value.trim() || "🙂",
         name: r.querySelector(".m-name").value.trim(),
         role: r.querySelector(".m-role").value,
       }))
@@ -1210,7 +1208,7 @@
 
   // Wire Setup Form
   document.getElementById("btn-add-member-row").addEventListener("click", () => {
-    appendMemberSetupRow({ avatar: "🌟", role: "Child" });
+    appendMemberSetupRow({ role: "Child" });
   });
 
   document.getElementById("household-setup-form").addEventListener("submit", async (e) => {
@@ -1627,7 +1625,7 @@
       const members = appState.members || [];
       members.slice(0, 4).forEach((m) => {
         chips.push({
-          label: `${m.avatar || "🙂"} Apenas ${m.name}`,
+          label: `Apenas ${m.name}`,
           prompt: `Apenas ${m.name} vai participar.`,
         });
       });
@@ -1635,12 +1633,12 @@
       if (kids.length >= 2) {
         const kidNames = kids.map((k) => k.name).join(" e ");
         chips.push({
-          label: `🧒 ${kidNames}`,
+          label: kidNames,
           prompt: `${kidNames} vão participar.`,
         });
       }
       chips.push({
-        label: "👨‍👩‍👧‍👦 [All] Toda a Família",
+        label: "[All] Toda a Família",
         prompt: "[All] Toda a família vai participar.",
       });
       return chips.slice(0, 5);
@@ -1890,9 +1888,7 @@
         bubble.appendChild(mediaWrap);
       }
       const captionDiv = document.createElement("div");
-      const prefix = msg.speaker_name
-        ? `${msg.speaker_avatar ? msg.speaker_avatar + " " : ""}${msg.speaker_name}: `
-        : "";
+      const prefix = msg.speaker_name ? `${msg.speaker_name}: ` : "";
       captionDiv.textContent = `${prefix}${msg.content || ""}`;
       bubble.appendChild(captionDiv);
       return bubble;
@@ -2244,7 +2240,7 @@
           })),
           member_id: active.member_id,
           member_name: active.name,
-          member_avatar: active.avatar || "🙂",
+          member_avatar: "",
           session_id: targetSessionId,
         }),
       });

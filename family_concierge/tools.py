@@ -94,7 +94,6 @@ class FamilyMemberInput(BaseModel):
 
     name: str = Field(..., min_length=2, max_length=60, description="Display name of the family member.")
     role: MemberRole = Field(default="Parent", description="Household role: Parent, Teen, Child, or Relative.")
-    avatar: str = Field(default="🙂", max_length=8, description="Single emoji avatar representing the member.")
 
 
 class EventListFilterInput(BaseModel):
@@ -474,7 +473,6 @@ def get_family_household_profile(
 def upsert_family_member(
     name: Annotated[str, Field(description="Display name of the family member.", min_length=2)],
     role: Annotated[MemberRole, Field(description="Role in household: Parent, Teen, Child, or Relative.")] = "Parent",
-    avatar: Annotated[str, Field(description="Emoji icon for this member, e.g. '⚽' or '🎸'.")] = "🙂",
     tool_context: Optional[ToolContext] = None,
 ) -> dict[str, Any]:
     """Adds or updates a family member in the shared household configuration.
@@ -482,7 +480,6 @@ def upsert_family_member(
     Args:
         name: Display name of the family member.
         role: Household role (`Parent`, `Teen`, `Child`, or `Relative`).
-        avatar: Emoji avatar shown on the member switcher.
         tool_context: ADK runtime context.
 
     Returns:
@@ -490,7 +487,7 @@ def upsert_family_member(
         `GuidedToolErrorOutput` dictionary with `recovery_hint`.
     """
     try:
-        validated = FamilyMemberInput(name=name, role=role, avatar=avatar)
+        validated = FamilyMemberInput(name=name, role=role)
     except ValidationError as exc:
         return _guided_error(
             error_code="INVALID_MEMBER_INPUT",
@@ -502,7 +499,7 @@ def upsert_family_member(
     saved = store.upsert_member_row(
         name=validated.name,
         role=validated.role,
-        avatar=validated.avatar,
+        avatar="",
         color=palette.get(validated.role, "#1b6b5a"),
         routine_notes="",
     )

@@ -54,15 +54,13 @@ Using the parallel snapshots gathered in session state:
 {list_snap}
 </lists_snapshot>
 
-Synthesize a practical, conflict-free family plan that:
-1. Explicitly anchors on TODAY'S EXACT LOCAL DATE first (never confuse today with next Saturday!).
-   If today is Sunday or Saturday, clearly separate any light option for the rest of TODAY from the
-   upcoming week and NEXT weekend.
-2. Respects every existing event and sports/music arrival buffer.
-3. Prioritizes urgent `NEED_TO_DO` errands first, then fits `WANT_TO_DO` wish-list outings into open windows.
-4. Proposes concrete time slots with exact dates (`YYYY-MM-DD - Weekday`) and mandatory bracketed
-   prefixes (`[Member]` or `[All]`) without inventing locations.
-5. Replies in Brazilian Portuguese (`pt-BR`) by default, or in English when the user's request is in English."""
+Synthesize a practical, conflict-free family plan optimized for a mobile screen (STRICTLY CONCISE, max ~100 words total):
+1. Anchor on TODAY'S EXACT LOCAL DATE first (never confuse today with next Saturday!).
+   If today is Sunday or Saturday, separate today's remaining window from the upcoming week/next weekend.
+2. Respect existing events and sports/music arrival buffers; prioritize urgent `NEED_TO_DO` items, then fit `WANT_TO_DO` wishes.
+3. Output at most 4 to 6 compact one-line bullets (`- DD/MM (Dia) HH:MM-HH:MM: **[Membro] Atividade**`) with zero filler intro or outro paragraphs and without inventing locations.
+4. End with one short `👉 Ação Necessária: **...**` question and `[QUICK_REPLIES: ...]`.
+5. Reply in Brazilian Portuguese (`pt-BR`) by default, or in English when the user's request is in English, using regular `-` hyphens only."""
 
 
 def _conflict_advisor_instruction(_ctx: ReadonlyContext) -> str:
@@ -73,12 +71,11 @@ You are the Schedule Conflict & Buffer Advisor (Pro tier).
 2. Identify any direct time overlaps or arrival-buffer overlaps ONLY for the SAME family member (or `[All]`) relative to TODAY'S EXACT LOCAL DATE.
    - Events belonging to different family members do NOT conflict.
    - Full-day / all-day events (`is_all_day=True` or `00:00-23:59`) NEVER count as conflicts.
-3. Remember: even same-member overlaps are non-blocking warnings, NOT forbidden! Start any overlap notice on its own line with
-   `⚠️ Warning:`, and present both:
-   (a) keeping the requested slot with a clear logistics note, and (b) 1-2 alternative conflict-free slots formatted
-   with `[Participant]` or `[All]`.
-4. End with `👉 Action Needed: **<bold question asking which option the user prefers>**` and a `[QUICK_REPLIES: ...]` line.
-5. Reply concisely in the user's language (English or Portuguese) using regular `-` hyphens (no long dashes)."""
+3. Keep your entire reply ultra-concise (max ~65 words total, zero filler):
+   - One `⚠️ Aviso:` line naming the conflicting event and time.
+   - At most 2 short bullets: (a) keep requested time, or (b) 1-2 free slots formatted with `[Participant]` or `[All]`.
+   - One `👉 Ação Necessária: **<short question>**` line + `[QUICK_REPLIES: ...]`.
+4. Reply in Brazilian Portuguese (`pt-BR`) by default (or English if requested in English) using regular `-` hyphens (no long dashes)."""
 
 
 # ---------------------------------------------------------------------------

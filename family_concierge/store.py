@@ -557,7 +557,7 @@ def save_household_setup(
                         m_id,
                         m["name"].strip(),
                         (m.get("role") or "Parent").strip(),
-                        (m.get("avatar") or "🙂").strip(),
+                        (m.get("avatar") or "").strip(),
                         (m.get("color") or "#1b6b5a").strip(),
                         (m.get("email") or "").strip(),
                         (m.get("routine_notes") or "").strip(),
@@ -570,7 +570,7 @@ def save_household_setup(
 def upsert_member_row(
     name: str,
     role: str = "Parent",
-    avatar: str = "🙂",
+    avatar: str = "",
     color: str = "#1b6b5a",
     email: str = "",
     routine_notes: str = "",

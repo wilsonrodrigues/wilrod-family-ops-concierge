@@ -83,7 +83,7 @@ def _get_session_lock(session_id: str) -> asyncio.Lock:
 app = FastAPI(
     title="Family Ops Concierge",
     description="Shared Family Calendar, Multimodal Voice & Invitation Intake, Errands, Wishes, and ADK Concierge.",
-    version="0.8.0",
+    version="0.8.1",
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -108,7 +108,7 @@ class MemberSetupItem(BaseModel):
     member_id: Optional[str] = None
     name: str = Field(..., min_length=1, max_length=60)
     role: str = Field(default="Parent")
-    avatar: str = Field(default="🙂")
+    avatar: str = Field(default="")
     color: str = Field(default="#1b6b5a")
     email: str = Field(default="")
 
