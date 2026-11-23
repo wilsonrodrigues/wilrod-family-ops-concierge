@@ -3,7 +3,28 @@
   "short_name": "Family Ops",
   "description": "Agenda compartilhada da família, tarefas pendentes, lista de desejos e Concierge IA",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#faf7f2",
-  "theme_color": "#1b6b5a"
+  "theme_color": "#1b6b5a",
+  "icons": [
+    {
+      "src": "/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
 }

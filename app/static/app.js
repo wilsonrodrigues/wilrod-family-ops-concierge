@@ -2345,6 +2345,48 @@
     });
   }
 
+  const shareLinkBtn = document.getElementById("btn-share-app-link");
+  if (shareLinkBtn) {
+    shareLinkBtn.addEventListener("click", async () => {
+      const shareUrl = `${window.location.origin}/`;
+      const famName = (appState.household && appState.household.household_name) || "Family Ops Concierge";
+      if (navigator.share) {
+        try {
+          await navigator.share({
+            title: famName,
+            text: `Link da nossa agenda e listas da família (${famName}):`,
+            url: shareUrl,
+          });
+          return;
+        } catch (_err) {
+          // User cancelled native share sheet or unsupported
+        }
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+        showBanner("setup-feedback", `Link copiado (${shareUrl})! Envie no WhatsApp para sua família.`, "success");
+      }
+    });
+  }
+
+  // Auto-sync shared state across multiple family phones when unlocking or returning to the app
+  let lastAutoSyncAt = Date.now();
+  async function syncOnPhoneForeground() {
+    if (document.visibilityState && document.visibilityState !== "visible") return;
+    if (Date.now() - lastAutoSyncAt < 4000) return;
+    if (inflightBySession.size > 0) return;
+    const setupPanel = document.getElementById("view-setup");
+    if (setupPanel && setupPanel.classList.contains("active")) return;
+    lastAutoSyncAt = Date.now();
+    try {
+      await loadFullState(false);
+    } catch (_err) {
+      // Keep UI quiet on background refresh
+    }
+  }
+  document.addEventListener("visibilitychange", syncOnPhoneForeground);
+  window.addEventListener("focus", syncOnPhoneForeground);
+
   // Passcode Unlock Modal
   document.getElementById("passcode-unlock-form").addEventListener("submit", async (e) => {
     e.preventDefault();

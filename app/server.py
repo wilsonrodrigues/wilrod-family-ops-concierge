@@ -83,7 +83,7 @@ def _get_session_lock(session_id: str) -> asyncio.Lock:
 app = FastAPI(
     title="Family Ops Concierge",
     description="Shared Family Calendar, Multimodal Voice & Invitation Intake, Errands, Wishes, and ADK Concierge.",
-    version="0.8.1",
+    version="0.8.2",
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"

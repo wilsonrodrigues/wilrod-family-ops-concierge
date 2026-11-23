@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 import tempfile
 import threading
+import time
 from typing import Any, Iterator, Optional
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -22,6 +23,8 @@ SEED_DATA_PATH = Path(__file__).resolve().parent / "seed_data.json"
 
 _BACKUP_LOCK = threading.Lock()
 _RESTORED_RUNTIME_MAP: dict[str, str] = {}
+_LAST_SYNCED_MTIME_NS: dict[str, int] = {}
+_LAST_MTIME_CHECK_MONOTONIC: dict[str, float] = {}
 _INITIALIZED_RUNTIME_PATHS: set[str] = set()
 
 
@@ -31,7 +34,7 @@ def get_db_path() -> str:
 
 
 def resolve_sqlite_runtime_path(configured_path: str) -> str:
-    """Maps GCSFUSE SQLite paths onto fast local `/tmp` storage on Cloud Run (`K_SERVICE`), restoring any backup once."""
+    """Maps GCSFUSE SQLite paths onto fast local `/tmp` storage on Cloud Run (`K_SERVICE`), refreshing if GCS is newer."""
     if not configured_path or configured_path == ":memory:":
         return configured_path
 
@@ -47,23 +50,33 @@ def resolve_sqlite_runtime_path(configured_path: str) -> str:
         return str(target)
 
     with _BACKUP_LOCK:
-        cached = _RESTORED_RUNTIME_MAP.get(str(target))
-        if cached and Path(cached).exists():
-            return cached
-
+        key = str(target)
         runtime_dir = tmp_root / "family_ops_runtime"
         runtime_dir.mkdir(parents=True, exist_ok=True)
-        digest = hashlib.sha1(str(target).encode("utf-8")).hexdigest()[:10]
-        runtime_path = runtime_dir / f"{digest}_{target.name}"
+        digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
+        runtime_path = Path(_RESTORED_RUNTIME_MAP.get(key) or (runtime_dir / f"{digest}_{target.name}"))
 
-        if not runtime_path.exists():
+        now_mono = time.monotonic()
+        should_stat = (not runtime_path.exists()) or (
+            now_mono - _LAST_MTIME_CHECK_MONOTONIC.get(key, 0.0) >= 1.5
+        )
+        if should_stat:
+            _LAST_MTIME_CHECK_MONOTONIC[key] = now_mono
             try:
-                if target.is_file() and target.stat().st_size > 0:
-                    shutil.copyfile(str(target), str(runtime_path))
+                if target.is_file():
+                    st = target.stat()
+                    if st.st_size > 0 and (
+                        not runtime_path.exists()
+                        or st.st_mtime_ns > _LAST_SYNCED_MTIME_NS.get(key, 0)
+                    ):
+                        for suffix in ("-wal", "-shm"):
+                            Path(f"{runtime_path}{suffix}").unlink(missing_ok=True)
+                        shutil.copyfile(str(target), str(runtime_path))
+                        _LAST_SYNCED_MTIME_NS[key] = st.st_mtime_ns
             except OSError as exc:
                 logger.warning("Could not restore SQLite backup from %s: %s", target, exc)
 
-        _RESTORED_RUNTIME_MAP[str(target)] = str(runtime_path)
+        _RESTORED_RUNTIME_MAP[key] = str(runtime_path)
         return str(runtime_path)
 
 
@@ -94,6 +107,12 @@ def sync_sqlite_backup(runtime_path: str, configured_path: str) -> None:
                 src_conn.close()
             target_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(str(snap_tmp), str(target_file))
+            try:
+                key = str(target_file)
+                _LAST_SYNCED_MTIME_NS[key] = target_file.stat().st_mtime_ns
+                _LAST_MTIME_CHECK_MONOTONIC[key] = time.monotonic()
+            except OSError:
+                pass
         except OSError as exc:
             logger.warning("Could not sync SQLite backup to %s: %s", target_file, exc)
         except sqlite3.Error as exc:
