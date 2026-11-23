@@ -1558,8 +1558,7 @@
 
   // --- MULTI-SESSION CHAT HISTORY & NON-BLOCKING CONCURRENCY ---
 
-  const DEFAULT_WELCOME_TEXT =
-    "Olá! Como posso ajudar com a agenda ou as listas da família hoje?";
+  const DEFAULT_WELCOME_TEXT = "Como posso ajudar?";
 
   function setMobileHistoryOpen(open) {
     const rail = document.getElementById("chat-history-rail");
@@ -1924,11 +1923,6 @@
     const body = document.createElement("div");
     body.className = "chat-warning-body";
 
-    const lbl = document.createElement("div");
-    lbl.className = "chat-warning-label";
-    lbl.textContent = "Aviso de Agenda";
-    body.appendChild(lbl);
-
     const txt = document.createElement("div");
     txt.innerHTML = formatInlineRichHtml(stripWarningPrefix(warningLineText));
     body.appendChild(txt);
@@ -1949,11 +1943,6 @@
 
     const body = document.createElement("div");
     body.className = "chat-action-body";
-
-    const lbl = document.createElement("div");
-    lbl.className = "chat-action-label";
-    lbl.textContent = "Confirmação Necessária";
-    body.appendChild(lbl);
 
     const q = document.createElement("div");
     q.className = "chat-action-question";
@@ -2145,7 +2134,9 @@
     const { container: richBody, explicitChips, detectedQuestion } = renderRichAssistantContent(
       msg.content || ""
     );
-    bubble.appendChild(richBody);
+    if (richBody.childNodes.length > 0) {
+      bubble.appendChild(richBody);
+    }
 
     const pendingConfs = msg.pending_confirmations || [];
     const hasUnresolvedHitl = pendingConfs.some((c) => !c.resolved);
@@ -2154,13 +2145,6 @@
       const hasWarn = Boolean(conf.warnings && conf.warnings.length);
       const card = document.createElement("div");
       card.className = `hitl-confirm-card${hasWarn ? " has-warning" : ""}`;
-
-      const hdr = document.createElement("div");
-      hdr.className = "hitl-confirm-header";
-      hdr.textContent = hasWarn
-        ? "⚠️ Aviso de Conflito de Horário"
-        : "🛡️ Confirmação Necessária";
-      card.appendChild(hdr);
 
       const sum = document.createElement("div");
       sum.className = "hitl-confirm-summary";
@@ -2182,8 +2166,7 @@
 
         const warnNote = document.createElement("div");
         warnNote.className = "hitl-warning-note";
-        warnNote.innerHTML =
-          "<strong>Deseja adicionar este compromisso na Agenda da Família mesmo assim?</strong> Ele será agendado assim que você confirmar.";
+        warnNote.innerHTML = "<strong>Deseja agendar mesmo assim?</strong>";
         warnBox.appendChild(warnNote);
 
         card.appendChild(warnBox);
@@ -2201,7 +2184,7 @@
         const approveBtn = document.createElement("button");
         approveBtn.type = "button";
         approveBtn.className = "btn btn-primary";
-        approveBtn.textContent = hasWarn ? "✓ Sim, Agendar Mesmo Assim" : "✓ Aprovar e Executar";
+        approveBtn.textContent = hasWarn ? "✓ Sim, Agendar" : "✓ Confirmar";
 
         const cancelBtn = document.createElement("button");
         cancelBtn.type = "button";
@@ -2252,11 +2235,6 @@
       if (chipItems.length) {
         const chipsWrap = document.createElement("div");
         chipsWrap.className = "smart-chips-wrap";
-
-        const chipsLabel = document.createElement("div");
-        chipsLabel.className = "smart-chips-label";
-        chipsLabel.textContent = "Respostas rápidas (toque para responder):";
-        chipsWrap.appendChild(chipsLabel);
 
         const chipsRow = document.createElement("div");
         chipsRow.className = "smart-chips-row";

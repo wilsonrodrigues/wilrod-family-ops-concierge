@@ -86,7 +86,7 @@ def _get_session_lock(session_id: str) -> asyncio.Lock:
 app = FastAPI(
     title="Family Ops Concierge",
     description="Shared Family Calendar, Multimodal Voice & Invitation Intake, Errands, Wishes, and ADK Concierge.",
-    version="0.9.2",
+    version="0.9.3",
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -886,14 +886,8 @@ async def _execute_runner_turn(
                 models_used.append(PRO_MODEL_ID)
 
         reply_text = "\n".join(reply_chunks).strip()
-        if not reply_text:
-            if pending_confirmations:
-                reply_text = (
-                    "Confirmação necessária antes de atualizar a Agenda da Família. "
-                    "Revise os detalhes abaixo e toque em Aprovar ou Cancelar."
-                )
-            else:
-                reply_text = "Feito!"
+        if not reply_text and not pending_confirmations:
+            reply_text = "Feito!"
 
         root_span.set_attribute("concierge.tools_called_count", len(tool_calls_made))
         root_span.set_attribute("concierge.pending_confirmations_count", len(pending_confirmations))
