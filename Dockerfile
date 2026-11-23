@@ -8,17 +8,13 @@ WORKDIR /app
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    useradd --create-home --shell /bin/bash appuser
+    pip install --no-cache-dir -r requirements.txt
 
 COPY family_concierge ./family_concierge
 COPY app ./app
 COPY evals ./evals
 COPY pyproject.toml ./
 
-RUN chown -R appuser:appuser /app
-USER appuser
-
 EXPOSE 8080
 
-CMD ["uvicorn", "app.server:app", "--host", "::", "--port", "8080"]
+CMD ["sh", "-c", "exec uvicorn app.server:app --host 0.0.0.0 --port ${PORT:-8080}"]

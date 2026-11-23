@@ -16,6 +16,7 @@ from google.adk.sessions import DatabaseSessionService
 from google.adk.tools.load_memory_tool import load_memory_tool
 from google.adk.tools.preload_memory_tool import preload_memory_tool
 
+from . import store
 from .guardrails import FamilySafetyAndPolicyPlugin, build_tool_reflection_plugin
 from .memory_ops import build_recalled_memories_xml, household_memory_service
 from .model_router import TaskComplexityTier, get_model_for_tier
@@ -240,13 +241,28 @@ family_concierge_app = App(
 app = family_concierge_app
 
 
+_ADK_SESSION_BACKUP_PAIR: Optional[tuple[str, str]] = None
+
+
+def sync_adk_session_db_backup() -> None:
+    """Syncs the local Cloud Run `/tmp` ADK session SQLite DB back to its persistent volume path if staged."""
+    if _ADK_SESSION_BACKUP_PAIR is not None:
+        runtime_file, configured_file = _ADK_SESSION_BACKUP_PAIR
+        store.sync_sqlite_backup(runtime_file, configured_file)
+
+
 def create_persistent_runner(db_url: Optional[str] = None) -> tuple[Runner, DatabaseSessionService]:
     """Creates a production ADK `Runner` backed by persistent SQLite `DatabaseSessionService` and async memory."""
+    global _ADK_SESSION_BACKUP_PAIR
     resolved_db_url = db_url or os.environ.get("FAMILY_ADK_SESSION_DB", DEFAULT_SESSION_DB_URL)
     if resolved_db_url.startswith("sqlite+aiosqlite:///"):
         sqlite_file = resolved_db_url.replace("sqlite+aiosqlite:///", "", 1)
         if sqlite_file and sqlite_file != ":memory:":
-            Path(sqlite_file).parent.mkdir(parents=True, exist_ok=True)
+            runtime_file = store.resolve_sqlite_runtime_path(sqlite_file)
+            Path(runtime_file).parent.mkdir(parents=True, exist_ok=True)
+            if runtime_file != sqlite_file:
+                _ADK_SESSION_BACKUP_PAIR = (runtime_file, sqlite_file)
+                resolved_db_url = f"sqlite+aiosqlite:///{Path(runtime_file).as_posix()}"
     session_svc = DatabaseSessionService(db_url=resolved_db_url)
     runner = Runner(
         app=family_concierge_app,

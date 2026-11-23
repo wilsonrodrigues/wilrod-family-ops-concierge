@@ -28,7 +28,10 @@ load_dotenv(BASE_DIR / "family_concierge" / ".env")
 load_dotenv(BASE_DIR / ".env")
 
 from family_concierge import gcal_sync, store  # noqa: E402
-from family_concierge.agent import create_persistent_runner  # noqa: E402
+from family_concierge.agent import (  # noqa: E402
+    create_persistent_runner,
+    sync_adk_session_db_backup,
+)
 from family_concierge.model_router import (  # noqa: E402
     FAST_MODEL_ID,
     FLASH_MODEL_ID,
@@ -206,6 +209,14 @@ def _on_startup() -> None:
     store.init_db()
     with store._connect() as conn:
         conn.execute("UPDATE chat_sessions SET status = 'idle' WHERE status = 'running'")
+
+
+@app.on_event("shutdown")
+def _on_shutdown() -> None:
+    configured_db = store.get_db_path()
+    runtime_db = store.resolve_sqlite_runtime_path(configured_db)
+    store.sync_sqlite_backup(runtime_db, configured_db)
+    sync_adk_session_db_backup()
 
 
 @app.get("/api/auth/status")
@@ -688,6 +699,7 @@ async def _execute_runner_turn(
             span=root_span,
         )
 
+    await asyncio.to_thread(sync_adk_session_db_backup)
     bundle = store.get_household_bundle()
     return {
         "reply": reply_text,

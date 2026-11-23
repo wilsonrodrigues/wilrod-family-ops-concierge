@@ -1,34 +1,140 @@
 """Shared SQLite persistence layer for Family Ops Concierge household, members, calendar, and lists."""
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
+import shutil
 import sqlite3
-from typing import Any, Optional
+import tempfile
+import threading
+from typing import Any, Iterator, Optional
 import uuid
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "family_ops.db"
 SEED_DATA_PATH = Path(__file__).resolve().parent / "seed_data.json"
 
+_BACKUP_LOCK = threading.Lock()
+_RESTORED_RUNTIME_MAP: dict[str, str] = {}
+_INITIALIZED_RUNTIME_PATHS: set[str] = set()
+
 
 def get_db_path() -> str:
-    """Returns the SQLite file path for shared household state."""
+    """Returns the configured SQLite file path for shared household state."""
     return os.environ.get("FAMILY_OPS_DB_PATH", str(DEFAULT_DB_PATH))
 
 
-def _connect() -> sqlite3.Connection:
-    db_path = Path(get_db_path())
+def resolve_sqlite_runtime_path(configured_path: str) -> str:
+    """Maps GCSFUSE SQLite paths onto fast local `/tmp` storage on Cloud Run (`K_SERVICE`), restoring any backup once."""
+    if not configured_path or configured_path == ":memory:":
+        return configured_path
+
+    target = Path(configured_path)
+    tmp_root = Path(tempfile.gettempdir()).resolve()
+    try:
+        resolved_target = target.resolve()
+    except OSError:
+        resolved_target = target
+
+    # Outside Cloud Run (or if already under /tmp), operate directly on configured_path
+    if not os.environ.get("K_SERVICE") or str(resolved_target).startswith(str(tmp_root) + os.sep):
+        return str(target)
+
+    with _BACKUP_LOCK:
+        cached = _RESTORED_RUNTIME_MAP.get(str(target))
+        if cached and Path(cached).exists():
+            return cached
+
+        runtime_dir = tmp_root / "family_ops_runtime"
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha1(str(target).encode("utf-8")).hexdigest()[:10]
+        runtime_path = runtime_dir / f"{digest}_{target.name}"
+
+        if not runtime_path.exists():
+            try:
+                if target.is_file() and target.stat().st_size > 0:
+                    shutil.copyfile(str(target), str(runtime_path))
+            except OSError as exc:
+                logger.warning("Could not restore SQLite backup from %s: %s", target, exc)
+
+        _RESTORED_RUNTIME_MAP[str(target)] = str(runtime_path)
+        return str(runtime_path)
+
+
+def sync_sqlite_backup(runtime_path: str, configured_path: str) -> None:
+    """Exports a consistent single-file SQLite snapshot from `runtime_path` to `configured_path` (e.g. GCSFUSE)."""
+    if (
+        not runtime_path
+        or not configured_path
+        or runtime_path == configured_path
+        or runtime_path == ":memory:"
+    ):
+        return
+
+    runtime_file = Path(runtime_path)
+    target_file = Path(configured_path)
+    if not runtime_file.is_file():
+        return
+
+    with _BACKUP_LOCK:
+        snap_tmp = runtime_file.with_name(f"{runtime_file.name}.snap.tmp")
+        try:
+            src_conn = sqlite3.connect(str(runtime_file), timeout=10.0)
+            dst_conn = sqlite3.connect(str(snap_tmp), timeout=10.0)
+            try:
+                src_conn.backup(dst_conn)
+            finally:
+                dst_conn.close()
+                src_conn.close()
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(str(snap_tmp), str(target_file))
+        except OSError as exc:
+            logger.warning("Could not sync SQLite backup to %s: %s", target_file, exc)
+        except sqlite3.Error as exc:
+            logger.warning("SQLite snapshot backup error for %s: %s", target_file, exc)
+        finally:
+            try:
+                snap_tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
+    configured_path = get_db_path()
+    runtime_path = resolve_sqlite_runtime_path(configured_path)
+    db_path = Path(runtime_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+
+    conn = sqlite3.connect(str(db_path), timeout=15.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    journal_mode = os.environ.get("FAMILY_SQLITE_JOURNAL_MODE", "WAL").strip().upper()
-    if journal_mode not in ("WAL", "DELETE", "TRUNCATE", "MEMORY"):
+    # Local /tmp supports fast POSIX WAL; non-staged custom paths still honor FAMILY_SQLITE_JOURNAL_MODE
+    if runtime_path != configured_path:
         journal_mode = "WAL"
+    else:
+        journal_mode = os.environ.get("FAMILY_SQLITE_JOURNAL_MODE", "WAL").strip().upper()
+        if journal_mode not in ("WAL", "DELETE", "TRUNCATE", "MEMORY"):
+            journal_mode = "WAL"
     conn.execute(f"PRAGMA journal_mode={journal_mode};")
     conn.execute("PRAGMA foreign_keys=ON;")
-    return conn
+
+    changes_before = conn.total_changes
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        mutated = conn.total_changes > changes_before
+        conn.close()
+        if mutated and runtime_path != configured_path:
+            sync_sqlite_backup(runtime_path, configured_path)
 
 
 def hash_passcode(passcode: str) -> str:
@@ -53,6 +159,11 @@ def _load_seed_fixture() -> Optional[dict[str, Any]]:
 
 def init_db() -> None:
     """Creates household tables if missing, applies column migrations, and loads synthetic seed data on fresh DBs."""
+    configured_path = get_db_path()
+    runtime_path = resolve_sqlite_runtime_path(configured_path)
+    if runtime_path in _INITIALIZED_RUNTIME_PATHS and Path(runtime_path).is_file():
+        return
+
     with _connect() as conn:
         conn.executescript(
             """
@@ -173,6 +284,7 @@ def init_db() -> None:
         now_iso = datetime.now(timezone.utc).isoformat()
         row = conn.execute("SELECT id FROM household_config WHERE id = 1").fetchone()
         if row is not None:
+            _INITIALIZED_RUNTIME_PATHS.add(runtime_path)
             return
 
         seed = _load_seed_fixture()
