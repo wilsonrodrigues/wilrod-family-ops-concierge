@@ -83,7 +83,7 @@ def _get_session_lock(session_id: str) -> asyncio.Lock:
 app = FastAPI(
     title="Family Ops Concierge",
     description="Shared Family Calendar, Multimodal Voice & Invitation Intake, Errands, Wishes, and ADK Concierge.",
-    version="0.6.0",
+    version="0.7.0",
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -128,7 +128,6 @@ class CreateEventPayload(BaseModel):
     title: str = Field(..., min_length=2, max_length=140)
     start_iso: str
     end_iso: str
-    category: str = Field(default="other")
     participants: str = Field(default="All")
     location: Optional[str] = Field(default="")
     recurrence: str = Field(default="NONE")
@@ -330,6 +329,17 @@ def update_household_setup(payload: HouseholdSetupPayload) -> dict[str, Any]:
     }
 
 
+@app.post("/api/household/reset", dependencies=[Depends(require_household_auth)])
+def reset_household_endpoint() -> dict[str, Any]:
+    reset_bundle = store.reset_household_to_new_user()
+    _SESSION_LOCKS.clear()
+    return {
+        "status": "success",
+        "household": reset_bundle["household"],
+        "members": reset_bundle["members"],
+    }
+
+
 @app.get("/api/gcal/status", dependencies=[Depends(require_household_auth)])
 def get_gcal_status_endpoint(request: Request) -> dict[str, Any]:
     return gcal_sync.get_public_gcal_status(
@@ -464,7 +474,6 @@ def create_event_endpoint(payload: CreateEventPayload) -> dict[str, Any]:
         start_iso=payload.start_iso,
         end_iso=payload.end_iso,
         participants=payload.participants,
-        category=payload.category,  # type: ignore[arg-type]
         location=payload.location,
         recurrence=payload.recurrence,  # type: ignore[arg-type]
         occurrences=payload.occurrences,

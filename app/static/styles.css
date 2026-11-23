@@ -1223,6 +1223,101 @@ textarea:focus {
   font-size: 0.88rem;
 }
 
+/* Collapsible '+' Creation Drawers & First-Run Setup Polish */
+.header-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn-plus-icon {
+  appearance: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--brand-primary);
+  background: var(--brand-primary);
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1;
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.18s ease, background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+}
+
+.btn-plus-icon:hover {
+  background: var(--brand-primary-hover);
+  border-color: var(--brand-primary-hover);
+  transform: translateY(-1px);
+}
+
+.btn-plus-icon.open {
+  background: var(--bg-subtle);
+  color: var(--ink-primary);
+  border-color: var(--border-strong);
+  transform: rotate(45deg);
+}
+
+.collapsible-drawer {
+  display: none;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-bottom: 16px;
+  animation: fadeSlide 0.16s ease-out;
+}
+
+.collapsible-drawer.open {
+  display: block;
+}
+
+.drawer-title {
+  margin: 0 0 10px;
+  font-size: 0.94rem;
+  font-weight: 700;
+  color: var(--ink-primary);
+}
+
+.drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.onboarding-callout {
+  display: none;
+  padding: 13px 16px;
+  border-radius: var(--radius-md);
+  background: var(--bg-accent-soft);
+  border: 1px solid hsl(167, 40%, 80%);
+  color: var(--brand-primary);
+  font-size: 0.88rem;
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+
+.onboarding-callout.visible {
+  display: block;
+}
+
+.all-day-badge {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-accent-soft);
+  color: var(--brand-primary);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
 /* Passcode Modal */
 .modal-backdrop {
   position: fixed;

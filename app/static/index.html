@@ -30,13 +30,13 @@
         </div>
       </div>
 
-      <div class="switcher-wrap" aria-label="Active family member">
+      <div class="switcher-wrap" id="active-member-switcher" aria-label="Active family member">
         <span class="switcher-label">Who's here:</span>
         <div class="member-pills" id="active-member-pills"></div>
       </div>
     </header>
 
-    <nav class="primary-nav" aria-label="Main navigation">
+    <nav class="primary-nav" id="primary-nav" aria-label="Main navigation">
       <button type="button" class="nav-tab active" id="tab-btn-concierge" data-target="view-concierge">AI Concierge</button>
       <button type="button" class="nav-tab" id="tab-btn-calendar" data-target="view-calendar">Calendar</button>
       <button type="button" class="nav-tab" id="tab-btn-lists" data-target="view-lists">To-Do & Wishes</button>
@@ -48,74 +48,61 @@
         <div class="surface-card">
           <div class="section-header">
             <div>
-              <h2>Add Event to Shared Calendar</h2>
-              <p class="section-desc">Titles automatically add <code>[Participant]</code> or <code>[All]</code>, and sports/music add your arrival buffer.</p>
+              <h2>Upcoming Family Schedule</h2>
+              <p class="section-desc">Upcoming events from today onwards. Click <strong>+</strong> to add an event.</p>
+            </div>
+            <div class="header-actions-group">
+              <div class="filter-bar" id="calendar-horizon-filters" style="margin-bottom: 0;"></div>
+              <button type="button" class="btn-plus-icon" id="btn-toggle-event-form" title="Add event to shared calendar" aria-label="Add event to shared calendar" aria-expanded="false">+</button>
             </div>
           </div>
 
           <div class="feedback-banner" id="event-feedback"></div>
 
-          <form id="add-event-form" class="form-grid">
-            <div class="field-group">
-              <label for="evt-title">Event title</label>
-              <input type="text" id="evt-title" required minlength="2" placeholder="e.g. Sam's Birthday Party" />
-            </div>
-            <div class="field-group">
-              <label for="evt-category">Category</label>
-              <select id="evt-category">
-                <option value="other">General / Other</option>
-                <option value="school_exam">School Exam</option>
-                <option value="sports">Sports Match / Practice (+Buffer)</option>
-                <option value="music">Music Rehearsal / Audition (+Buffer)</option>
-                <option value="birthday_party">Birthday Party</option>
-                <option value="family_outing">Family Outing / Cinema</option>
-                <option value="errand">Scheduled Errand</option>
-              </select>
-            </div>
-            <div class="field-group">
-              <label for="evt-start">Start</label>
-              <input type="datetime-local" id="evt-start" required />
-            </div>
-            <div class="field-group">
-              <label for="evt-end">End</label>
-              <input type="datetime-local" id="evt-end" required />
-            </div>
-            <div class="field-group">
-              <label for="evt-recurrence">Repeat</label>
-              <select id="evt-recurrence">
-                <option value="NONE">Does not repeat (1x)</option>
-                <option value="WEEKLY">Weekly - 30 repetitions (e.g. every Tuesday)</option>
-                <option value="BIWEEKLY">Every 2 weeks - 30 repetitions</option>
-                <option value="DAILY">Daily - 30 repetitions</option>
-                <option value="MONTHLY">Monthly - 30 repetitions</option>
-              </select>
-            </div>
-            <div class="field-group full-width">
-              <label>Who's participating? (sets <code>[Name]</code> or <code>[All]</code> prefix)</label>
-              <div class="filter-bar" id="evt-participants-chips" style="margin-bottom: 0;"></div>
-            </div>
-            <div class="field-group">
-              <label for="evt-location">Location (leave blank if unknown)</label>
-              <input type="text" id="evt-location" placeholder="e.g. Community Sports Park (optional)" />
-            </div>
-            <div class="field-group">
-              <label for="evt-notes">Notes (optional)</label>
-              <input type="text" id="evt-notes" placeholder="Uniform, gift reminder..." />
-            </div>
-            <div class="field-group full-width">
-              <button type="submit" class="btn btn-primary" id="btn-submit-event">Add to Shared Calendar</button>
-            </div>
-          </form>
-        </div>
-
-        <div class="surface-card">
-          <div class="section-header">
-            <div>
-              <h2>Upcoming Family Schedule</h2>
-              <p class="section-desc">Filter by family member or switch between the next 14 days and all scheduled repetitions.</p>
-            </div>
-            <div class="filter-bar" id="calendar-horizon-filters" style="margin-bottom: 0;"></div>
+          <div class="collapsible-drawer" id="event-form-drawer">
+            <h3 class="drawer-title">Add Event to Shared Calendar</h3>
+            <form id="add-event-form" class="form-grid">
+              <div class="field-group full-width">
+                <label for="evt-title">Event title</label>
+                <input type="text" id="evt-title" required minlength="2" placeholder="e.g. Sam's Birthday Party or Soccer Practice" />
+              </div>
+              <div class="field-group">
+                <label for="evt-start">Start</label>
+                <input type="datetime-local" id="evt-start" required />
+              </div>
+              <div class="field-group">
+                <label for="evt-end">End</label>
+                <input type="datetime-local" id="evt-end" required />
+              </div>
+              <div class="field-group">
+                <label for="evt-recurrence">Repeat</label>
+                <select id="evt-recurrence">
+                  <option value="NONE">Does not repeat (1x)</option>
+                  <option value="WEEKLY">Weekly - 30 repetitions</option>
+                  <option value="BIWEEKLY">Every 2 weeks - 30 repetitions</option>
+                  <option value="DAILY">Daily - 30 repetitions</option>
+                  <option value="MONTHLY">Monthly - 30 repetitions</option>
+                </select>
+              </div>
+              <div class="field-group full-width">
+                <label>Who's participating? (sets <code>[Name]</code> or <code>[All]</code> prefix)</label>
+                <div class="filter-bar" id="evt-participants-chips" style="margin-bottom: 0;"></div>
+              </div>
+              <div class="field-group">
+                <label for="evt-location">Location (leave blank if unknown)</label>
+                <input type="text" id="evt-location" placeholder="e.g. Community Sports Park (optional)" />
+              </div>
+              <div class="field-group">
+                <label for="evt-notes">Notes (optional)</label>
+                <input type="text" id="evt-notes" placeholder="Uniform, gift reminder..." />
+              </div>
+              <div class="field-group full-width drawer-actions">
+                <button type="submit" class="btn btn-primary" id="btn-submit-event">Add to Calendar</button>
+                <button type="button" class="btn btn-secondary" id="btn-cancel-event-form">Cancel</button>
+              </div>
+            </form>
           </div>
+
           <div class="filter-bar" id="calendar-member-filters"></div>
           <div id="calendar-events-container"></div>
         </div>
@@ -123,41 +110,7 @@
 
       <!-- VIEW 2: SHARED TO-DO & WISH LISTS -->
       <section class="view-panel" id="view-lists">
-        <div class="surface-card">
-          <div class="section-header">
-            <div>
-              <h2>Add Errand or Family Wish</h2>
-              <p class="section-desc">Anyone in the family can add obligations (Need-To-Do) or fun ideas before they close (Want-To-Do).</p>
-            </div>
-          </div>
-
-          <div class="feedback-banner" id="item-feedback"></div>
-
-          <form id="add-item-form" class="form-grid">
-            <div class="field-group">
-              <label for="item-title">What do we need or want to do?</label>
-              <input type="text" id="item-title" required minlength="3" placeholder="e.g. Buy birthday gift, Watch movie before leaving cinemas" />
-            </div>
-            <div class="field-group">
-              <label for="item-type">List type</label>
-              <select id="item-type">
-                <option value="NEED_TO_DO">Need-To-Do (Errand / Obligation)</option>
-                <option value="WANT_TO_DO">Want-To-Do (Family Wish / Outing)</option>
-              </select>
-            </div>
-            <div class="field-group">
-              <label for="item-deadline">Due or closing date (optional)</label>
-              <input type="date" id="item-deadline" />
-            </div>
-            <div class="field-group">
-              <label for="item-assigned">Owner / Assigned to</label>
-              <select id="item-assigned"></select>
-            </div>
-            <div class="field-group full-width">
-              <button type="submit" class="btn btn-primary" id="btn-submit-item">Save to Shared List</button>
-            </div>
-          </form>
-        </div>
+        <div class="feedback-banner" id="item-feedback"></div>
 
         <div class="lists-columns">
           <div class="surface-card">
@@ -166,7 +119,31 @@
                 <h2>Need-To-Do Errands</h2>
                 <p class="section-desc">Deadlines, school prep, gifts, and logistics.</p>
               </div>
+              <button type="button" class="btn-plus-icon" id="btn-toggle-need-form" title="Add Need-To-Do errand" aria-label="Add Need-To-Do errand" aria-expanded="false">+</button>
             </div>
+
+            <div class="collapsible-drawer" id="need-item-drawer">
+              <h3 class="drawer-title">New Need-To-Do Errand</h3>
+              <form id="add-need-form" class="form-grid">
+                <div class="field-group full-width">
+                  <label for="need-item-title">What needs to be done?</label>
+                  <input type="text" id="need-item-title" required minlength="3" placeholder="e.g. Buy birthday gift, Renew passport" />
+                </div>
+                <div class="field-group">
+                  <label for="need-item-deadline">Due date (optional)</label>
+                  <input type="date" id="need-item-deadline" />
+                </div>
+                <div class="field-group">
+                  <label for="need-item-assigned">Owner / Assigned to</label>
+                  <select id="need-item-assigned" class="item-assigned-select"></select>
+                </div>
+                <div class="field-group full-width drawer-actions">
+                  <button type="submit" class="btn btn-primary">Save Errand</button>
+                  <button type="button" class="btn btn-secondary" id="btn-cancel-need-form">Cancel</button>
+                </div>
+              </form>
+            </div>
+
             <div id="need-todo-list"></div>
           </div>
 
@@ -176,14 +153,38 @@
                 <h2>Want-To-Do Wish List</h2>
                 <p class="section-desc">Movies, exhibitions, restaurants, and weekend ideas.</p>
               </div>
+              <button type="button" class="btn-plus-icon" id="btn-toggle-want-form" title="Add Want-To-Do wish" aria-label="Add Want-To-Do wish" aria-expanded="false">+</button>
             </div>
+
+            <div class="collapsible-drawer" id="want-item-drawer">
+              <h3 class="drawer-title">New Want-To-Do Wish</h3>
+              <form id="add-want-form" class="form-grid">
+                <div class="field-group full-width">
+                  <label for="want-item-title">What would we like to do?</label>
+                  <input type="text" id="want-item-title" required minlength="3" placeholder="e.g. Watch movie before leaving cinemas" />
+                </div>
+                <div class="field-group">
+                  <label for="want-item-deadline">Closing date (optional)</label>
+                  <input type="date" id="want-item-deadline" />
+                </div>
+                <div class="field-group">
+                  <label for="want-item-assigned">Suggested for / Owner</label>
+                  <select id="want-item-assigned" class="item-assigned-select"></select>
+                </div>
+                <div class="field-group full-width drawer-actions">
+                  <button type="submit" class="btn btn-primary">Save Wish</button>
+                  <button type="button" class="btn btn-secondary" id="btn-cancel-want-form">Cancel</button>
+                </div>
+              </form>
+            </div>
+
             <div id="want-todo-list"></div>
           </div>
         </div>
       </section>
 
-      <!-- VIEW 3: AI CONCIERGE (Default Main Screen) -->
-      <section class="view-panel active" id="view-concierge">
+      <!-- VIEW 3: AI CONCIERGE -->
+      <section class="view-panel" id="view-concierge">
         <div class="concierge-layout">
           <aside class="surface-card chat-history-rail" aria-label="Chat session history">
             <div class="chat-rail-header">
@@ -230,12 +231,16 @@
       <!-- VIEW 4: FAMILY SETUP SCREEN -->
       <section class="view-panel" id="view-setup">
         <div class="surface-card">
+          <div class="onboarding-callout" id="setup-welcome-banner">
+            Welcome to Family Ops Concierge! Set up your household name and family members below to get started. Once saved, the app will open straight to your AI Concierge.
+          </div>
+
           <div class="section-header">
             <div>
               <h2>Configure Your Family Household</h2>
-              <p class="section-desc">Set up your household name, scheduling rules, optional shared passcode, and every family member so everyone can use the app.</p>
+              <p class="section-desc">Set up your household name, language, timezone, optional shared passcode, and family members.</p>
             </div>
-            <button type="button" class="btn btn-secondary" id="btn-close-setup">Back to AI Concierge</button>
+            <button type="button" class="btn btn-secondary" id="btn-close-setup">Open AI Concierge</button>
           </div>
 
           <div class="feedback-banner" id="setup-feedback"></div>
@@ -244,7 +249,7 @@
             <div class="form-grid" style="margin-bottom: 20px;">
               <div class="field-group">
                 <label for="cfg-name">Household Name</label>
-                <input type="text" id="cfg-name" required placeholder="e.g. Foobar Family" />
+                <input type="text" id="cfg-name" required placeholder="e.g. Rodrigues Family" />
               </div>
               <div class="field-group">
                 <label for="cfg-language">Default Language</label>
@@ -258,7 +263,7 @@
                 <input type="text" id="cfg-timezone" value="America/Sao_Paulo" />
               </div>
               <div class="field-group">
-                <label for="cfg-buffer">Sports & Music Arrival Buffer (min)</label>
+                <label for="cfg-buffer">Arrival Buffer for Sports/Music (min)</label>
                 <input type="number" id="cfg-buffer" min="0" max="120" value="30" />
               </div>
               <div class="field-group">
@@ -277,9 +282,10 @@
 
             <div id="setup-members-list"></div>
 
-            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px;">
-              <button type="submit" class="btn btn-primary" id="btn-save-setup">Save Family Configuration</button>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; align-items: center;">
+              <button type="submit" class="btn btn-primary" id="btn-save-setup">Save & Open AI Concierge</button>
               <button type="button" class="btn btn-secondary" id="btn-clear-passcode">Remove Passcode Lock</button>
+              <button type="button" class="btn btn-ghost-danger" id="btn-reset-household" style="margin-left: auto;">Reset Household</button>
             </div>
           </form>
         </div>

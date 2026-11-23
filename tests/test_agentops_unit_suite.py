@@ -27,6 +27,8 @@ def isolated_household_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     monkeypatch.setenv("FAMILY_OPS_DB_PATH", str(db_file))
     monkeypatch.setenv("FAMILY_ADK_SESSION_DB", f"sqlite+aiosqlite:///{sess_file.as_posix()}")
     monkeypatch.setenv("FAMILY_TELEMETRY_LOG_FILE", str(log_file))
+    monkeypatch.setenv("FAMILY_OPS_LOAD_SEED", "1")
+    monkeypatch.setenv("USE_SECRET_MANAGER", "0")
 
     from family_concierge import store
 
@@ -95,30 +97,51 @@ def test_tool_interface_design_and_strict_schemas(isolated_household_env: Path) 
     assert ambiguous["error_code"] == "PARTICIPANTS_UNCLEAR"
     assert "recovery_hint" in ambiguous and len(ambiguous["recovery_hint"]) > 15
 
-    # 2. Sports event enforces [Participant] prefix, blank placeholder location, and 30-min arrival buffer
+    # 2. Sports event enforces [Participant] prefix, blank placeholder location, and title-inferred 30-min arrival buffer (no category field)
     scheduled = schedule_family_calendar_event(
         title="Soccer Practice",
         start_iso="2026-12-02T16:00:00",
         end_iso="2026-12-02T17:30:00",
         participants="Kid2",
-        category="sports",
         location="TBD",
         recurrence="NONE",
         occurrences=1,
     )
     assert scheduled["status"] == "success"
+    assert "category" not in scheduled["event"]
     assert scheduled["event"]["title"] == "[Kid2] Soccer Practice"
     assert scheduled["event"]["location"] == ""
     assert scheduled["buffer_applied_minutes"] == 30
     assert scheduled["event"]["buffer_start_iso"] == "2026-12-02T15:30:00"
 
-    # 3. Overlapping slot (including 30-min buffer!) warns via OVERLAP_CONFIRMATION_REQUIRED,
+    # 2b. Different family member (Kid1 vs Kid2) at the exact same time does NOT conflict!
+    other_member_ok = schedule_family_calendar_event(
+        title="Art Workshop",
+        start_iso="2026-12-02T16:00:00",
+        end_iso="2026-12-02T17:30:00",
+        participants="Kid1",
+    )
+    assert other_member_ok["status"] == "success"
+    assert other_member_ok["overlap_warnings"] == []
+
+    # 2c. Full-day event on the same day does NOT trigger conflicts!
+    full_day_ok = schedule_family_calendar_event(
+        title="School Spirit Day",
+        start_iso="2026-12-02T00:00:00",
+        end_iso="2026-12-02T23:59:00",
+        participants="All",
+    )
+    assert full_day_ok["status"] == "success"
+    assert full_day_ok["event"]["is_all_day"] is True
+    assert full_day_ok["overlap_warnings"] == []
+
+    # 3. Same family member (Kid2) overlapping slot (including 30-min buffer!) warns via OVERLAP_CONFIRMATION_REQUIRED,
     #    then succeeds when confirmed via allow_overlap=True OR ADK HITL tool_confirmation!
     unconfirmed_overlap = schedule_family_calendar_event(
         title="Medical Appointment",
         start_iso="2026-12-02T15:00:00",
         end_iso="2026-12-02T15:45:00",
-        participants="Kid1",
+        participants="Kid2",
     )
     assert unconfirmed_overlap["status"] == "error"
     assert unconfirmed_overlap["error_code"] == "OVERLAP_CONFIRMATION_REQUIRED"
@@ -128,11 +151,11 @@ def test_tool_interface_design_and_strict_schemas(isolated_household_env: Path) 
         title="Medical Appointment",
         start_iso="2026-12-02T15:00:00",
         end_iso="2026-12-02T15:45:00",
-        participants="Kid1",
+        participants="Kid2",
         allow_overlap=True,
     )
     assert confirmed_overlap["status"] == "success"
-    assert confirmed_overlap["event"]["title"] == "[Kid1] Medical Appointment"
+    assert confirmed_overlap["event"]["title"] == "[Kid2] Medical Appointment"
     assert len(confirmed_overlap["overlap_warnings"]) >= 1
 
     hitl_ctx = MagicMock()
@@ -142,12 +165,12 @@ def test_tool_interface_design_and_strict_schemas(isolated_household_env: Path) 
         title="Dental Checkup",
         start_iso="2026-12-02T16:15:00",
         end_iso="2026-12-02T17:00:00",
-        participants="Kid1",
+        participants="Kid2",
         allow_overlap=False,
         tool_context=hitl_ctx,
     )
     assert hitl_approved_overlap["status"] == "success"
-    assert hitl_approved_overlap["event"]["title"] == "[Kid1] Dental Checkup"
+    assert hitl_approved_overlap["event"]["title"] == "[Kid2] Dental Checkup"
     assert len(hitl_approved_overlap["overlap_warnings"]) >= 1
 
     # 4. Recurring event defaults to 30 occurrences sharing a series_id (Wednesday evening slot is conflict-free)
@@ -156,7 +179,6 @@ def test_tool_interface_design_and_strict_schemas(isolated_household_env: Path) 
         start_iso="2026-12-02T19:00:00",
         end_iso="2026-12-02T20:00:00",
         participants="Kid1",
-        category="music",
         recurrence="WEEKLY",
     )
     assert recurring["status"] == "success"
@@ -428,13 +450,28 @@ def test_observability_pii_redaction_and_secret_manager(
     assert client.delete(f"/api/chat/sessions/{sid}").status_code == 200
     assert client.get("/api/telemetry").status_code == 200
 
-    # Manual Calendar form overlap warning + user confirmation override
+    # Manual Calendar form: different family member (Kid1 vs Kid2's Band Rehearsal) has zero conflict
+    non_conflict_resp = client.post(
+        "/api/events",
+        json={
+            "title": "Study Group",
+            "start_iso": "2026-11-27T15:30:00",
+            "end_iso": "2026-11-27T16:30:00",
+            "participants": "Kid1",
+            "recurrence": "NONE",
+            "occurrences": 1,
+            "created_by": "Mama",
+            "allow_overlap": False,
+        },
+    )
+    assert non_conflict_resp.status_code == 200
+
+    # Same family member (Kid2 vs [Kid2] Band Rehearsal) triggers overlap warning + user confirmation override
     overlap_payload = {
         "title": "Pediatrician Visit",
         "start_iso": "2026-11-27T15:30:00",
         "end_iso": "2026-11-27T16:30:00",
-        "participants": "Kid1",
-        "category": "other",
+        "participants": "Kid2",
         "recurrence": "NONE",
         "occurrences": 1,
         "created_by": "Mama",
@@ -539,7 +576,6 @@ def test_google_calendar_link_parser_rrule_and_sync_adapter(isolated_household_e
         end_iso="2026-12-09T18:00:00",
         buffer_start_iso="2026-12-09T16:30:00",
         buffer_minutes=30,
-        category="music",
         participants="Kid1",
         location="",
         recurrence="WEEKLY",
@@ -594,3 +630,46 @@ def test_google_calendar_link_parser_rrule_and_sync_adapter(isolated_household_e
         calendarId="family999@group.calendar.google.com",
         eventId="gcal-master-001",
     )
+
+
+def test_clean_new_user_bootstrap_and_past_date_filtering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verifies production deploy starts without seed data, directs to Setup (`is_configured=False`), and hides past dates."""
+    fresh_db = tmp_path / "production_fresh.db"
+    monkeypatch.setenv("FAMILY_OPS_DB_PATH", str(fresh_db))
+    monkeypatch.delenv("FAMILY_OPS_LOAD_SEED", raising=False)
+
+    from family_concierge import store
+
+    bundle = store.get_household_bundle()
+    assert bundle["household"]["is_configured"] is False
+    assert bundle["household"]["household_name"] == ""
+    assert bundle["members"] == []
+    assert store.query_events() == []
+    assert store.query_action_items(include_completed=True) == []
+    assert store.query_household_memories() == []
+
+    # Past events are excluded by default from upcoming schedule queries
+    store.insert_events_batch(
+        [
+            {
+                "title": "[All] Old Event",
+                "start_iso": "2020-01-10T10:00:00",
+                "end_iso": "2020-01-10T11:00:00",
+                "buffer_start_iso": "2020-01-10T10:00:00",
+                "participants": "All",
+            },
+            {
+                "title": "[All] Future Event",
+                "start_iso": "2099-05-10T10:00:00",
+                "end_iso": "2099-05-10T11:00:00",
+                "buffer_start_iso": "2099-05-10T10:00:00",
+                "participants": "All",
+            },
+        ]
+    )
+    upcoming = store.query_events()
+    assert len(upcoming) == 1
+    assert upcoming[0]["title"] == "[All] Future Event"

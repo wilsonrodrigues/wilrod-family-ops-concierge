@@ -13,6 +13,7 @@ import tempfile
 import threading
 from typing import Any, Iterator, Optional
 import uuid
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -145,9 +146,14 @@ def hash_passcode(passcode: str) -> str:
     return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()
 
 
+SCHEMA_CLEAN_START_VERSION = 2
+
+
 def _load_seed_fixture() -> Optional[dict[str, Any]]:
-    """Loads synthetic evaluation seed data from `seed_data.json` unless disabled via env."""
+    """Loads synthetic evaluation seed data ONLY when `FAMILY_OPS_LOAD_SEED=1` (e.g. unit tests)."""
     if os.environ.get("FAMILY_OPS_SKIP_SEED") == "1":
+        return None
+    if os.environ.get("FAMILY_OPS_LOAD_SEED") != "1":
         return None
     if not SEED_DATA_PATH.exists():
         return None
@@ -155,6 +161,14 @@ def _load_seed_fixture() -> Optional[dict[str, Any]]:
         return json.loads(SEED_DATA_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _serialize_event_row(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalizes a `calendar_events` SQLite row into our clean category-free event record."""
+    d = dict(raw)
+    d.pop("category", None)
+    d["is_all_day"] = bool(d.get("is_all_day", 0))
+    return d
 
 
 def init_db() -> None:
@@ -280,14 +294,43 @@ def init_db() -> None:
             conn.execute("ALTER TABLE calendar_events ADD COLUMN series_id TEXT NOT NULL DEFAULT ''")
         if "recurrence" not in existing_cols:
             conn.execute("ALTER TABLE calendar_events ADD COLUMN recurrence TEXT NOT NULL DEFAULT 'NONE'")
+        if "is_all_day" not in existing_cols:
+            conn.execute("ALTER TABLE calendar_events ADD COLUMN is_all_day INTEGER NOT NULL DEFAULT 0")
 
         now_iso = datetime.now(timezone.utc).isoformat()
+        seed = _load_seed_fixture()
+
+        if seed is None:
+            user_ver_row = conn.execute("PRAGMA user_version").fetchone()
+            user_ver = int(user_ver_row[0]) if user_ver_row else 0
+            if user_ver < SCHEMA_CLEAN_START_VERSION:
+                # One-time clean reset from pre-v2 seeded Foobar Family state to brand-new unconfigured onboarding
+                conn.execute("DELETE FROM calendar_events")
+                conn.execute("DELETE FROM action_items")
+                conn.execute("DELETE FROM household_memories")
+                conn.execute("DELETE FROM chat_messages")
+                conn.execute("DELETE FROM chat_sessions")
+                conn.execute("DELETE FROM family_members")
+                conn.execute("DELETE FROM gcal_oauth_states")
+                conn.execute("DELETE FROM gcal_integration")
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO household_config (
+                        id, household_name, timezone, preferred_language, passcode_hash,
+                        sports_music_buffer_min, is_configured, updated_at
+                    ) VALUES (1, '', 'America/Sao_Paulo', 'en', '', 30, 0, ?)
+                    """,
+                    (now_iso,),
+                )
+                conn.execute(f"PRAGMA user_version = {SCHEMA_CLEAN_START_VERSION}")
+                _INITIALIZED_RUNTIME_PATHS.add(runtime_path)
+                return
+
         row = conn.execute("SELECT id FROM household_config WHERE id = 1").fetchone()
         if row is not None:
             _INITIALIZED_RUNTIME_PATHS.add(runtime_path)
             return
 
-        seed = _load_seed_fixture()
         if seed:
             hh = seed.get("household", {})
             conn.execute(
@@ -329,8 +372,8 @@ def init_db() -> None:
                     """
                     INSERT INTO calendar_events (
                         event_id, series_id, recurrence, title, start_iso, end_iso, buffer_start_iso,
-                        category, participants, location, created_by, notes, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        is_all_day, category, participants, location, created_by, notes, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         ev["event_id"],
@@ -340,7 +383,8 @@ def init_db() -> None:
                         ev["start_iso"],
                         ev["end_iso"],
                         ev["buffer_start_iso"],
-                        ev.get("category", "other"),
+                        1 if ev.get("is_all_day") else 0,
+                        "",
                         ev.get("participants", "All"),
                         ev.get("location", ""),
                         ev.get("created_by", "Family"),
@@ -382,32 +426,51 @@ def init_db() -> None:
                         mem.get("updated_at", now_iso),
                     ),
                 )
+            _INITIALIZED_RUNTIME_PATHS.add(runtime_path)
             return
 
-        # Minimal empty fallback when FAMILY_OPS_SKIP_SEED=1
+        # Clean empty bootstrap for brand-new households (no seed data)
         conn.execute(
             """
             INSERT INTO household_config (
                 id, household_name, timezone, preferred_language, passcode_hash,
                 sports_music_buffer_min, is_configured, updated_at
-            ) VALUES (1, 'Foobar Family', 'America/Sao_Paulo', 'en', '', 30, 0, ?)
+            ) VALUES (1, '', 'America/Sao_Paulo', 'en', '', 30, 0, ?)
             """,
             (now_iso,),
         )
-        starter_members = [
-            ("mem-parent-1", "Parent 1", "Parent", "🧭", "#1b6b5a", "", "Coordinates family logistics", now_iso),
-            ("mem-parent-2", "Parent 2", "Parent", "🌿", "#2b5b84", "", "Shared calendar & errands", now_iso),
-            ("mem-teen-1", "Teen", "Teen", "🎸", "#8c5319", "", "Exams & music rehearsal", now_iso),
-            ("mem-child-1", "Child", "Child", "⚽", "#7a3e65", "", "Weekend soccer friendlies & activities", now_iso),
-        ]
-        conn.executemany(
+        conn.execute(f"PRAGMA user_version = {SCHEMA_CLEAN_START_VERSION}")
+        _INITIALIZED_RUNTIME_PATHS.add(runtime_path)
+
+
+def reset_household_to_new_user() -> dict[str, Any]:
+    """Wipes household data back to a clean first-time onboarding state."""
+    init_db()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        conn.execute("DELETE FROM calendar_events")
+        conn.execute("DELETE FROM action_items")
+        conn.execute("DELETE FROM household_memories")
+        conn.execute("DELETE FROM chat_messages")
+        conn.execute("DELETE FROM chat_sessions")
+        conn.execute("DELETE FROM family_members")
+        conn.execute("DELETE FROM gcal_oauth_states")
+        conn.execute("DELETE FROM gcal_integration")
+        conn.execute(
             """
-            INSERT INTO family_members (
-                member_id, name, role, avatar, color, email, routine_notes, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            UPDATE household_config
+            SET household_name = '',
+                timezone = 'America/Sao_Paulo',
+                preferred_language = 'en',
+                passcode_hash = '',
+                sports_music_buffer_min = 30,
+                is_configured = 0,
+                updated_at = ?
+            WHERE id = 1
             """,
-            starter_members,
+            (now_iso,),
         )
+    return get_household_bundle()
 
 
 def get_household_bundle() -> dict[str, Any]:
@@ -548,20 +611,34 @@ def upsert_member_row(
     return saved
 
 
-def query_events(date_filter: Optional[str] = None, participant_filter: Optional[str] = None) -> list[dict[str, Any]]:
-    """Queries calendar events ordered chronologically."""
+def query_events(
+    date_filter: Optional[str] = None,
+    participant_filter: Optional[str] = None,
+    include_past: bool = False,
+) -> list[dict[str, Any]]:
+    """Queries calendar events ordered chronologically (upcoming from today onwards unless `date_filter` or `include_past` is set)."""
     init_db()
-    sql = "SELECT * FROM calendar_events WHERE 1=1"
-    params: list[Any] = []
-    if date_filter:
-        sql += " AND start_iso LIKE ?"
-        params.append(f"{date_filter}%")
-    if participant_filter and participant_filter.lower() not in ("all", "whole family"):
-        sql += " AND (LOWER(participants) LIKE ? OR LOWER(participants) IN ('all', 'whole family'))"
-        params.append(f"%{participant_filter.lower()}%")
-    sql += " ORDER BY start_iso ASC"
     with _connect() as conn:
-        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+        tz_row = conn.execute("SELECT timezone FROM household_config WHERE id = 1").fetchone()
+        tz_name = str(tz_row["timezone"]) if tz_row and tz_row["timezone"] else "America/Sao_Paulo"
+        try:
+            today_str = datetime.now(ZoneInfo(tz_name)).strftime("%Y-%m-%d")
+        except ZoneInfoNotFoundError:
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        sql = "SELECT * FROM calendar_events WHERE 1=1"
+        params: list[Any] = []
+        if date_filter:
+            sql += " AND start_iso LIKE ?"
+            params.append(f"{date_filter}%")
+        elif not include_past:
+            sql += " AND SUBSTR(end_iso, 1, 10) >= ?"
+            params.append(today_str)
+        if participant_filter and participant_filter.lower() not in ("all", "whole family"):
+            sql += " AND (LOWER(participants) LIKE ? OR LOWER(participants) IN ('all', 'whole family'))"
+            params.append(f"%{participant_filter.lower()}%")
+        sql += " ORDER BY start_iso ASC"
+        return [_serialize_event_row(dict(r)) for r in conn.execute(sql, params).fetchall()]
 
 
 def insert_events_batch(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -579,7 +656,8 @@ def insert_events_batch(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "start_iso": ev["start_iso"],
                 "end_iso": ev["end_iso"],
                 "buffer_start_iso": ev["buffer_start_iso"],
-                "category": ev.get("category", "other"),
+                "is_all_day": 1 if ev.get("is_all_day") else 0,
+                "category": "",
                 "participants": ev.get("participants", "All"),
                 "location": ev.get("location", ""),
                 "created_by": ev.get("created_by", "Family"),
@@ -592,15 +670,15 @@ def insert_events_batch(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             """
             INSERT INTO calendar_events (
                 event_id, series_id, recurrence, title, start_iso, end_iso, buffer_start_iso,
-                category, participants, location, created_by, notes, created_at
+                is_all_day, category, participants, location, created_by, notes, created_at
             ) VALUES (
                 :event_id, :series_id, :recurrence, :title, :start_iso, :end_iso, :buffer_start_iso,
-                :category, :participants, :location, :created_by, :notes, :created_at
+                :is_all_day, :category, :participants, :location, :created_by, :notes, :created_at
             )
             """,
             records,
         )
-    return records
+    return [_serialize_event_row(r) for r in records]
 
 
 def delete_event_by_id(event_id: str, delete_series: bool = False) -> Optional[dict[str, Any]]:
@@ -610,7 +688,7 @@ def delete_event_by_id(event_id: str, delete_series: bool = False) -> Optional[d
         row = conn.execute("SELECT * FROM calendar_events WHERE event_id = ?", (event_id,)).fetchone()
         if row is None:
             return None
-        target = dict(row)
+        target = _serialize_event_row(dict(row))
         if delete_series and target.get("series_id"):
             cur = conn.execute("DELETE FROM calendar_events WHERE series_id = ?", (target["series_id"],))
             target["deleted_count"] = cur.rowcount

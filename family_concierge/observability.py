@@ -50,7 +50,7 @@ from pythonjsonlogger.json import JsonFormatter
 from .pii_redactor import PiiRedactionPipeline, default_pii_redactor
 
 SERVICE_NAME = "family-ops-concierge"
-SERVICE_VERSION = "0.6.0"
+SERVICE_VERSION = "0.7.0"
 
 
 class BoundedMemorySpanExporter(SpanExporter):

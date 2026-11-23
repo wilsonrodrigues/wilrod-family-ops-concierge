@@ -17,21 +17,19 @@ from . import gcal_sync, store
 override_feature_enabled(FeatureName.JSON_SCHEMA_FOR_FUNC_DECL, True)
 override_feature_enabled(FeatureName.FUNCTION_TOOL_ARG_VALIDATION, True)
 
-EventCategory = Literal[
-    "school_exam",
-    "sports",
-    "music",
-    "birthday_party",
-    "family_outing",
-    "errand",
-    "other",
-]
 RecurrencePattern = Literal["NONE", "DAILY", "WEEKLY", "BIWEEKLY", "MONTHLY"]
 ActionItemType = Literal["NEED_TO_DO", "WANT_TO_DO"]
 ActionItemStatus = Literal["OPEN", "DONE"]
 MemberRole = Literal["Parent", "Teen", "Child", "Relative"]
 
 DEFAULT_RECURRING_OCCURRENCES = 30
+
+_SPORTS_MUSIC_TITLE_RE = re.compile(
+    r"\b(soccer|football|volleyball|tennis|beach\s+tennis|basketball|swim|swimming|gym|match|practice|"
+    r"futebol|v[oô]lei|treino|band|music|rehearsal|piano|guitar|drums|bass|singing|choir|violin|audition|"
+    r"ensaio|m[uú]sica|aula\s+de\s+canto)\b",
+    re.IGNORECASE,
+)
 
 _WHOLE_FAMILY_ALIASES = {
     "all",
@@ -118,7 +116,6 @@ class CalendarEventInput(BaseModel):
     start_iso: str = Field(..., description="First event start in ISO-8601 format YYYY-MM-DDTHH:MM:SS.")
     end_iso: str = Field(..., description="First event end in ISO-8601 format YYYY-MM-DDTHH:MM:SS.")
     participants: str = Field(..., min_length=1, max_length=100, description="Exact participant name(s) or 'All' for whole family.")
-    category: EventCategory = Field(default="other", description="Domain category used to enforce buffer rules.")
     location: Optional[str] = Field(default=None, max_length=160, description="Identified event location/venue, or empty if unknown.")
     recurrence: RecurrencePattern = Field(default="NONE", description="NONE, DAILY, WEEKLY, BIWEEKLY, or MONTHLY.")
     occurrences: int = Field(default=DEFAULT_RECURRING_OCCURRENCES, ge=1, le=60, description="Repetitions when recurring (default 30).")
@@ -243,7 +240,7 @@ class CalendarEventRecordSchema(BaseModel):
     start_iso: str
     end_iso: str
     buffer_start_iso: str
-    category: str
+    is_all_day: bool = False
     participants: str
     location: str = ""
     created_by: str
@@ -288,7 +285,7 @@ class DeletedEventSummarySchema(BaseModel):
     start_iso: str
     end_iso: str
     buffer_start_iso: str
-    category: str
+    is_all_day: bool = False
     participants: str
     location: str = ""
     created_by: str
@@ -348,6 +345,46 @@ def _guided_error(error_code: str, message: str, recovery_hint: str) -> dict[str
         message=message,
         recovery_hint=recovery_hint,
     ).model_dump()
+
+
+def _extract_member_tokens(raw_participants: str) -> tuple[bool, set[str]]:
+    """Returns `(is_whole_family, member_token_set)` for per-member conflict checks."""
+    cleaned = (raw_participants or "").strip().strip("[]").strip()
+    if not cleaned or cleaned.lower() in _WHOLE_FAMILY_ALIASES:
+        return True, set()
+    parts = [
+        tok.strip().strip("[]").strip().lower()
+        for tok in re.split(r"[,;&/]+|\band\b|\be\b", cleaned, flags=re.IGNORECASE)
+        if tok.strip().strip("[]").strip()
+    ]
+    if not parts or any(p in _WHOLE_FAMILY_ALIASES for p in parts):
+        return True, set()
+    return False, set(parts)
+
+
+def participants_share_member(participants_a: str, participants_b: str) -> bool:
+    """Returns True only when both events involve at least one common family member (or `[All]`)."""
+    all_a, set_a = _extract_member_tokens(participants_a)
+    all_b, set_b = _extract_member_tokens(participants_b)
+    if all_a or all_b:
+        return True
+    return bool(set_a & set_b)
+
+
+def is_full_day_span(start_dt: datetime, end_dt: datetime, is_all_day_flag: bool = False) -> bool:
+    """Returns True when an event is an all-day / full-day event (excluded from conflict checks)."""
+    if is_all_day_flag:
+        return True
+    if start_dt.hour == 0 and start_dt.minute == 0 and (end_dt - start_dt) >= timedelta(hours=23, minutes=50):
+        return True
+    return False
+
+
+def infer_arrival_buffer_minutes(title: str, configured_buffer: int, is_all_day: bool = False) -> int:
+    """Applies `configured_buffer` automatically when a timed event title matches sports or music."""
+    if is_all_day or configured_buffer <= 0:
+        return 0
+    return configured_buffer if _SPORTS_MUSIC_TITLE_RE.search(title or "") else 0
 
 
 def normalize_participants_and_title(raw_title: str, raw_participants: str) -> tuple[str, str]:
@@ -555,10 +592,6 @@ def schedule_family_calendar_event(
             )
         ),
     ],
-    category: Annotated[
-        EventCategory,
-        Field(description="Event category: school_exam, sports, music, birthday_party, family_outing, errand, other."),
-    ] = "other",
     location: Annotated[
         Optional[str],
         Field(
@@ -593,7 +626,7 @@ def schedule_family_calendar_event(
         bool,
         Field(
             description=(
-                "Set True ONLY if you already warned the user about a time or 30-min buffer overlap "
+                "Set True ONLY if you already warned the user about a same-member time or 30-min buffer overlap "
                 "and the user explicitly confirmed adding the event anyway. Leave False initially so "
                 "the user is warned and asked for confirmation."
             )
@@ -607,19 +640,18 @@ def schedule_family_calendar_event(
     1. Mandatory bracketed participant prefix on `title` (`[Name] ...` or `[All] ...`).
     2. Non-fabricated `location` (leaves blank when location is not stated).
     3. Automatic generation of 30 repetitions whenever `recurrence != 'NONE'`.
-    4. Non-blocking warning + human confirmation for overlapping events or 30-minute sports/music arrival buffers.
+    4. Non-blocking warning + human confirmation ONLY for same-member overlaps (ignoring full-day events).
 
     Args:
         title: Event title (automatically normalized to `[<participants>] <title>` or `[All] <title>`).
         start_iso: First event start timestamp in `YYYY-MM-DDTHH:MM:SS` format.
         end_iso: First event end timestamp in `YYYY-MM-DDTHH:MM:SS` format.
         participants: Confirmed family member name(s) attending, or `'All'` for the whole family.
-        category: Domain category controlling automatic buffer calculation.
         location: Venue or address explicitly identified from user context; omit if unknown.
         recurrence: `'NONE'`, `'DAILY'`, `'WEEKLY'`, `'BIWEEKLY'`, or `'MONTHLY'`.
         occurrences: Number of occurrences when `recurrence != 'NONE'` (defaults to 30).
         notes: Optional preparation details.
-        allow_overlap: True when the human has already accepted an overlap or arrival-buffer warning.
+        allow_overlap: True when the human has already accepted a same-member overlap or arrival-buffer warning.
         tool_context: ADK runtime context providing active speaker and HITL confirmation state.
 
     Returns:
@@ -643,7 +675,6 @@ def schedule_family_calendar_event(
             start_iso=start_iso,
             end_iso=end_iso,
             participants=participants,
-            category=category,
             location=location,
             recurrence=recurrence,
             occurrences=occurrences,
@@ -673,10 +704,11 @@ def schedule_family_calendar_event(
         validated.title, validated.participants
     )
     cleaned_location = sanitize_location(validated.location)
+    is_all_day = is_full_day_span(first_start, first_end)
 
     household = store.get_household_bundle()["household"]
     configured_buffer = int(household.get("sports_music_buffer_min", 30))
-    buffer_minutes = configured_buffer if validated.category in ("sports", "music") else 0
+    buffer_minutes = infer_arrival_buffer_minutes(bracketed_title, configured_buffer, is_all_day=is_all_day)
     duration = first_end - first_start
 
     total_count = 1 if validated.recurrence == "NONE" else validated.occurrences
@@ -686,7 +718,8 @@ def schedule_family_calendar_event(
     overlap_warnings = find_calendar_overlaps(
         start_iso=validated.start_iso,
         end_iso=validated.end_iso,
-        category=validated.category,
+        participants=normalized_participants,
+        title=bracketed_title,
         recurrence=validated.recurrence,
         occurrences=total_count,
     )
@@ -700,12 +733,11 @@ def schedule_family_calendar_event(
     if overlap_warnings and not effective_allow_overlap:
         return _guided_error(
             error_code="OVERLAP_CONFIRMATION_REQUIRED",
-            message="Schedule or 30-min arrival-buffer overlap detected: " + " | ".join(overlap_warnings),
+            message="Same-member schedule or arrival-buffer overlap detected: " + " | ".join(overlap_warnings),
             recovery_hint=(
-                "Do NOT forbid this entry! Overlaps are allowed on a family calendar when confirmed. "
-                "Warn the user clearly about the overlap or 30-min arrival-buffer notice above and ask if "
-                "they want to schedule it anyway. If the user confirms, call schedule_family_calendar_event "
-                "again with allow_overlap=True."
+                "Do NOT forbid this entry! Warn the user clearly about this overlap for the same family member "
+                "and ask if they want to schedule it anyway. If the user confirms, call "
+                "schedule_family_calendar_event again with allow_overlap=True."
             ),
         )
 
@@ -718,7 +750,6 @@ def schedule_family_calendar_event(
                 end_iso=first_end.strftime("%Y-%m-%dT%H:%M:%S"),
                 buffer_start_iso=first_buf_iso,
                 buffer_minutes=buffer_minutes,
-                category=validated.category,
                 participants=normalized_participants,
                 location=cleaned_location,
                 recurrence=validated.recurrence,
@@ -731,7 +762,7 @@ def schedule_family_calendar_event(
                 error_code="GOOGLE_CALENDAR_API_ERROR",
                 message=f"Failed to write event to Google Calendar: {exc}",
                 recovery_hint=(
-                    "Check Family Setup -> Google Calendar Integration to confirm the personal Google account "
+                    "Check Family Setup -> Family Google Calendar to confirm the personal Google account "
                     "is connected and has write permission on the selected shared calendar."
                 ),
             )
@@ -758,7 +789,7 @@ def schedule_family_calendar_event(
                 "start_iso": occ_start.isoformat(),
                 "end_iso": occ_end.isoformat(),
                 "buffer_start_iso": occ_effective_start.isoformat(),
-                "category": validated.category,
+                "is_all_day": is_all_day,
                 "participants": normalized_participants,
                 "location": cleaned_location,
                 "created_by": author,
@@ -987,11 +1018,12 @@ def find_calendar_overlaps(
     *,
     start_iso: str,
     end_iso: str,
-    category: str = "other",
+    participants: str = "All",
+    title: str = "",
     recurrence: str = "NONE",
     occurrences: int = 1,
 ) -> list[str]:
-    """Detects direct schedule overlaps and 30-min arrival-buffer overlaps as non-blocking warnings."""
+    """Detects direct schedule overlaps and 30-min arrival-buffer overlaps ONLY for the same family member, ignoring full-day events."""
     try:
         first_start = datetime.fromisoformat(start_iso)
         first_end = datetime.fromisoformat(end_iso)
@@ -999,10 +1031,12 @@ def find_calendar_overlaps(
         return []
     if first_end <= first_start:
         return []
+    if is_full_day_span(first_start, first_end):
+        return []
 
     household = store.get_household_bundle()["household"]
     configured_buffer = int(household.get("sports_music_buffer_min", 30))
-    buffer_minutes = configured_buffer if category in ("sports", "music") else 0
+    buffer_minutes = infer_arrival_buffer_minutes(title, configured_buffer, is_all_day=False)
     duration = first_end - first_start
     rec_mode: RecurrencePattern = recurrence if recurrence in ("NONE", "DAILY", "WEEKLY", "BIWEEKLY", "MONTHLY") else "NONE"  # type: ignore[assignment]
     total_count = 1 if rec_mode == "NONE" else max(1, min(int(occurrences or 1), 60))
@@ -1020,8 +1054,13 @@ def find_calendar_overlaps(
 
         for existing in existing_by_day.get(day_key, []):
             ex_raw_start = datetime.fromisoformat(existing["start_iso"])
-            ex_buf_start = datetime.fromisoformat(existing.get("buffer_start_iso", existing["start_iso"]))
             ex_end = datetime.fromisoformat(existing["end_iso"])
+            if is_full_day_span(ex_raw_start, ex_end, bool(existing.get("is_all_day"))):
+                continue
+            if not participants_share_member(participants, str(existing.get("participants") or "All")):
+                continue
+
+            ex_buf_start = datetime.fromisoformat(existing.get("buffer_start_iso", existing["start_iso"]))
 
             if occ_start < ex_end and occ_end > ex_raw_start:
                 warnings.append(
@@ -1043,15 +1082,16 @@ def find_calendar_overlaps(
 
 
 def should_confirm_schedule_event(
+    title: str = "",
     start_iso: str = "",
     end_iso: str = "",
-    category: EventCategory = "other",
+    participants: str = "All",
     recurrence: RecurrencePattern = "NONE",
     occurrences: int = 1,
     allow_overlap: bool = False,
     **kwargs: Any,
 ) -> bool:
-    """Requires Human-in-the-Loop confirmation on recurring series OR unconfirmed schedule/buffer overlaps."""
+    """Requires Human-in-the-Loop confirmation on recurring series OR unconfirmed same-member overlaps."""
     del kwargs
     total_count = 1 if recurrence == "NONE" else int(occurrences or 1)
     if recurrence != "NONE" and total_count >= 5:
@@ -1060,7 +1100,8 @@ def should_confirm_schedule_event(
         overlaps = find_calendar_overlaps(
             start_iso=start_iso,
             end_iso=end_iso,
-            category=category,
+            participants=participants,
+            title=title,
             recurrence=recurrence,
             occurrences=total_count,
         )

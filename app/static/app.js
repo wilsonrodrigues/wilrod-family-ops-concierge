@@ -15,7 +15,7 @@
     activeMemberId: localStorage.getItem(ACTIVE_MEMBER_KEY) || "",
     selectedEventParticipants: [],
     calendarFilter: "ALL",
-    calendarHorizon: "ALL",
+    calendarHorizon: "14D",
     pendingAttachments: [], // [{ id, filename, mime_type, data_base64, preview_url }]
     sessionId: localStorage.getItem(SESSION_KEY) || `fam-session-${Math.random().toString(36).slice(2, 8)}`,
   };
@@ -106,21 +106,97 @@
     });
   }
 
+  function getHouseholdTimezone() {
+    return (appState.household && appState.household.timezone) || "America/Sao_Paulo";
+  }
+
+  function getHouseholdTodayYmd() {
+    try {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: getHouseholdTimezone(),
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+    } catch (_err) {
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, "0");
+      const d = String(now.getDate()).padStart(2, "0");
+      return `${y}-${m}-${d}`;
+    }
+  }
+
+  function addDaysToYmd(ymd, days) {
+    const base = new Date(`${ymd}T12:00:00Z`);
+    if (Number.isNaN(base.getTime())) return ymd;
+    base.setUTCDate(base.getUTCDate() + days);
+    return base.toISOString().slice(0, 10);
+  }
+
+  function isEventAllDay(ev) {
+    if (ev.is_all_day) return true;
+    const s = String(ev.start_iso || "");
+    const e = String(ev.end_iso || "");
+    if (s.endsWith("T00:00:00") && (e.endsWith("T23:59:00") || e.endsWith("T23:59:59"))) {
+      return true;
+    }
+    return false;
+  }
+
+  function setDrawerOpen(drawerId, btnId, open) {
+    const drawer = document.getElementById(drawerId);
+    const btn = document.getElementById(btnId);
+    if (!drawer || !btn) return;
+    drawer.classList.toggle("open", open);
+    btn.classList.toggle("open", open);
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+
+  function prefillDefaultEventDatetimes() {
+    const startEl = document.getElementById("evt-start");
+    const endEl = document.getElementById("evt-end");
+    if (!startEl || !endEl || startEl.value) return;
+    const todayYmd = getHouseholdTodayYmd();
+    const nextHour = Math.min(22, new Date().getHours() + 1);
+    const endHour = Math.min(23, nextHour + 1);
+    startEl.value = `${todayYmd}T${String(nextHour).padStart(2, "0")}:00`;
+    endEl.value = `${todayYmd}T${String(endHour).padStart(2, "0")}:00`;
+  }
+
   function renderHeaderAndSwitchers() {
-    const hh = appState.household;
-    const todayFormatted = new Date().toLocaleDateString(hh.preferred_language || "en", {
-      weekday: "short",
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-    });
+    const hh = appState.household || {};
+    const isConfigured = Boolean(hh.is_configured);
+    let todayFormatted = "";
+    try {
+      todayFormatted = new Date().toLocaleDateString(hh.preferred_language || "en", {
+        timeZone: getHouseholdTimezone(),
+        weekday: "short",
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+      });
+    } catch (_err) {
+      todayFormatted = new Date().toLocaleDateString(hh.preferred_language || "en");
+    }
+
     document.getElementById("household-title").textContent = hh.household_name || "Family Ops Concierge";
     const gcalSuffix =
       appState.gcal && appState.gcal.active_sync
         ? ` | 📅 Google Calendar: ${appState.gcal.calendar_summary || appState.gcal.calendar_id}`
         : "";
-    document.getElementById("household-rules-summary").textContent =
-      `Today: ${todayFormatted} | Arrival buffer: ${hh.sports_music_buffer_min ?? 30} min${gcalSuffix}`;
+    document.getElementById("household-rules-summary").textContent = isConfigured
+      ? `Today: ${todayFormatted}${gcalSuffix}`
+      : `Today: ${todayFormatted} | First-time Family Setup`;
+
+    const navEl = document.getElementById("primary-nav");
+    const switcherEl = document.getElementById("active-member-switcher");
+    const closeSetupBtn = document.getElementById("btn-close-setup");
+    const welcomeBanner = document.getElementById("setup-welcome-banner");
+    if (navEl) navEl.style.display = isConfigured ? "grid" : "none";
+    if (switcherEl) switcherEl.style.display = isConfigured && appState.members.length ? "flex" : "none";
+    if (closeSetupBtn) closeSetupBtn.style.display = isConfigured ? "inline-flex" : "none";
+    if (welcomeBanner) welcomeBanner.classList.toggle("visible", !isConfigured);
 
     const active = getActiveMember();
     appState.activeMemberId = active.member_id;
@@ -150,13 +226,18 @@
     }
     renderParticipantSelectorChips();
 
-    const assignSelect = document.getElementById("item-assigned");
-    assignSelect.innerHTML = `<option value="Anyone">Anyone in Family</option>`;
-    appState.members.forEach((m) => {
-      const opt2 = document.createElement("option");
-      opt2.value = m.name;
-      opt2.textContent = `${m.avatar || ""} ${m.name}`;
-      assignSelect.appendChild(opt2);
+    document.querySelectorAll(".item-assigned-select").forEach((assignSelect) => {
+      const prevVal = assignSelect.value;
+      assignSelect.innerHTML = `<option value="Anyone">Anyone in Family</option>`;
+      appState.members.forEach((m) => {
+        const opt = document.createElement("option");
+        opt.value = m.name;
+        opt.textContent = `${m.avatar || ""} ${m.name}`;
+        assignSelect.appendChild(opt);
+      });
+      if (prevVal && Array.from(assignSelect.options).some((o) => o.value === prevVal)) {
+        assignSelect.value = prevVal;
+      }
     });
   }
 
@@ -197,6 +278,15 @@
   }
 
   function renderCalendar() {
+    const todayYmd = getHouseholdTodayYmd();
+    const cutoff14dYmd = addDaysToYmd(todayYmd, 14);
+
+    // Strictly exclude dates from the past (events whose end date is before today in household timezone)
+    const upcomingEvents = appState.events.filter((ev) => {
+      const endDay = String(ev.end_iso || ev.start_iso || "").slice(0, 10);
+      return endDay >= todayYmd;
+    });
+
     const horizonEl = document.getElementById("calendar-horizon-filters");
     if (horizonEl) {
       horizonEl.innerHTML = "";
@@ -212,7 +302,7 @@
       const btnAll = document.createElement("button");
       btnAll.type = "button";
       btnAll.className = `filter-chip ${appState.calendarHorizon === "ALL" ? "active" : ""}`;
-      btnAll.textContent = `All Scheduled (${appState.events.length})`;
+      btnAll.textContent = `All Upcoming (${upcomingEvents.length})`;
       btnAll.addEventListener("click", () => {
         appState.calendarHorizon = "ALL";
         renderCalendar();
@@ -250,15 +340,10 @@
     const container = document.getElementById("calendar-events-container");
     container.innerHTML = "";
 
-    const now = new Date();
-    const cutoff14d = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
-
-    const filtered = appState.events.filter((ev) => {
-      if (appState.calendarHorizon === "14D") {
-        const dt = new Date(ev.start_iso);
-        if (!Number.isNaN(dt.getTime()) && dt > cutoff14d) {
-          return false;
-        }
+    const filtered = upcomingEvents.filter((ev) => {
+      const startDay = String(ev.start_iso || "").slice(0, 10);
+      if (appState.calendarHorizon === "14D" && startDay > cutoff14dYmd) {
+        return false;
       }
       if (appState.calendarFilter === "ALL") return true;
       const p = (ev.participants || "").toLowerCase();
@@ -266,13 +351,14 @@
     });
 
     if (!filtered.length) {
-      container.innerHTML = `<div class="empty-state">No events in this view. Add an event above, switch horizon to All Scheduled, or upload an invitation to the AI Concierge!</div>`;
+      container.innerHTML = `<div class="empty-state">No upcoming events in this view. Click <strong>+</strong> above to add one, or ask the AI Concierge!</div>`;
       return;
     }
 
     let currentDay = "";
     filtered.forEach((ev) => {
-      const dayPart = ev.start_iso.slice(0, 10);
+      const rawDayPart = ev.start_iso.slice(0, 10);
+      const dayPart = rawDayPart < todayYmd ? todayYmd : rawDayPart;
       if (dayPart !== currentDay) {
         currentDay = dayPart;
         const h = document.createElement("div");
@@ -283,12 +369,17 @@
 
       const row = document.createElement("div");
       row.className = "event-row";
-      const hasBuffer = ev.buffer_start_iso && ev.buffer_start_iso !== ev.start_iso;
+      const allDay = isEventAllDay(ev);
+      const hasBuffer = !allDay && ev.buffer_start_iso && ev.buffer_start_iso !== ev.start_iso;
       const isRecurring = ev.recurrence && ev.recurrence !== "NONE" && ev.series_id;
 
       row.innerHTML = `
         <div class="event-time-col">
-          <div>${formatTime(ev.start_iso)} - ${formatTime(ev.end_iso)}</div>
+          ${
+            allDay
+              ? `<span class="all-day-badge">All day</span>`
+              : `<div>${formatTime(ev.start_iso)} - ${formatTime(ev.end_iso)}</div>`
+          }
           ${hasBuffer ? `<span class="buffer-tag">Buffer ${formatTime(ev.buffer_start_iso)}</span>` : ""}
         </div>
         <div class="event-main-col">
@@ -297,7 +388,6 @@
             <span>👥 ${escapeHtml(ev.participants === "All" ? "All Family" : ev.participants)}</span>
             ${ev.location ? `<span>📍 ${escapeHtml(ev.location)}</span>` : ""}
             ${isRecurring ? `<span>🔁 ${escapeHtml(ev.recurrence)}</span>` : ""}
-            <span>🏷️ ${escapeHtml(ev.category)}</span>
             <span>✍️ Added by ${escapeHtml(ev.created_by || "Family")}</span>
             ${ev.notes ? `<span>📝 ${escapeHtml(ev.notes)}</span>` : ""}
           </div>
@@ -348,13 +438,13 @@
     const wants = appState.items.filter((i) => i.item_type === "WANT_TO_DO");
 
     if (!needs.length) {
-      needEl.innerHTML = `<div class="empty-state">No open errands. Add obligations or prep tasks above!</div>`;
+      needEl.innerHTML = `<div class="empty-state">No open errands. Click <strong>+</strong> above to add one!</div>`;
     } else {
       needs.forEach((item) => needEl.appendChild(buildItemRow(item)));
     }
 
     if (!wants.length) {
-      wantEl.innerHTML = `<div class="empty-state">No wish-list items yet. Add movies, outings, or family ideas!</div>`;
+      wantEl.innerHTML = `<div class="empty-state">No wish-list items yet. Click <strong>+</strong> above to add movies, outings, or family ideas!</div>`;
     } else {
       wants.forEach((item) => wantEl.appendChild(buildItemRow(item)));
     }
@@ -410,8 +500,11 @@
   }
 
   function renderSetupForm() {
-    const hh = appState.household;
-    document.getElementById("cfg-name").value = hh.household_name || "";
+    const hh = appState.household || {};
+    const cfgNameEl = document.getElementById("cfg-name");
+    if (document.activeElement !== cfgNameEl) {
+      cfgNameEl.value = hh.household_name || "";
+    }
     document.getElementById("cfg-language").value = hh.preferred_language || "en";
     document.getElementById("cfg-timezone").value = hh.timezone || "America/Sao_Paulo";
     document.getElementById("cfg-buffer").value = hh.sports_music_buffer_min ?? 30;
@@ -422,7 +515,11 @@
 
     const listEl = document.getElementById("setup-members-list");
     listEl.innerHTML = "";
-    appState.members.forEach((m) => appendMemberSetupRow(m));
+    if (appState.members.length > 0) {
+      appState.members.forEach((m) => appendMemberSetupRow(m));
+    } else {
+      appendMemberSetupRow({ avatar: "🙂", role: "Parent" });
+    }
 
     renderGcalSetupCard();
   }
@@ -567,6 +664,10 @@
         switchTab("view-setup");
         showBanner("gcal-feedback", `Google OAuth failed: ${params.get("gcal_error")}`, "error");
         window.history.replaceState({}, "", window.location.pathname);
+      } else if (!appState.household || !appState.household.is_configured) {
+        switchTab("view-setup");
+      } else {
+        switchTab("view-concierge");
       }
       if (appState.gcal && appState.gcal.is_connected) {
         refreshGcalCalendarsDropdown();
@@ -776,12 +877,18 @@
 
   // Wire Navigation Tabs & Header Gear Icon
   document.querySelectorAll(".nav-tab").forEach((btn) => {
-    btn.addEventListener("click", () => switchTab(btn.dataset.target));
+    btn.addEventListener("click", () => {
+      if (!appState.household || !appState.household.is_configured) {
+        switchTab("view-setup");
+        return;
+      }
+      switchTab(btn.dataset.target);
+    });
   });
 
   document.getElementById("btn-open-setup").addEventListener("click", () => {
     const setupPanel = document.getElementById("view-setup");
-    if (setupPanel.classList.contains("active")) {
+    if (setupPanel.classList.contains("active") && appState.household && appState.household.is_configured) {
       switchTab("view-concierge");
     } else {
       switchTab("view-setup");
@@ -789,8 +896,79 @@
   });
 
   document.getElementById("btn-close-setup").addEventListener("click", () => {
-    switchTab("view-concierge");
+    if (appState.household && appState.household.is_configured) {
+      switchTab("view-concierge");
+    }
   });
+
+  // Wire Collapsible '+' Drawers for Calendar Events & Lists
+  const toggleEventBtn = document.getElementById("btn-toggle-event-form");
+  if (toggleEventBtn) {
+    toggleEventBtn.addEventListener("click", () => {
+      const drawer = document.getElementById("event-form-drawer");
+      const nextOpen = !drawer.classList.contains("open");
+      setDrawerOpen("event-form-drawer", "btn-toggle-event-form", nextOpen);
+      if (nextOpen) {
+        prefillDefaultEventDatetimes();
+        document.getElementById("evt-title").focus();
+      }
+    });
+  }
+  const cancelEventBtn = document.getElementById("btn-cancel-event-form");
+  if (cancelEventBtn) {
+    cancelEventBtn.addEventListener("click", () => {
+      setDrawerOpen("event-form-drawer", "btn-toggle-event-form", false);
+    });
+  }
+
+  const toggleNeedBtn = document.getElementById("btn-toggle-need-form");
+  if (toggleNeedBtn) {
+    toggleNeedBtn.addEventListener("click", () => {
+      const drawer = document.getElementById("need-item-drawer");
+      const nextOpen = !drawer.classList.contains("open");
+      setDrawerOpen("need-item-drawer", "btn-toggle-need-form", nextOpen);
+      if (nextOpen) {
+        document.getElementById("need-item-title").focus();
+      }
+    });
+  }
+  const cancelNeedBtn = document.getElementById("btn-cancel-need-form");
+  if (cancelNeedBtn) {
+    cancelNeedBtn.addEventListener("click", () => {
+      setDrawerOpen("need-item-drawer", "btn-toggle-need-form", false);
+    });
+  }
+
+  const toggleWantBtn = document.getElementById("btn-toggle-want-form");
+  if (toggleWantBtn) {
+    toggleWantBtn.addEventListener("click", () => {
+      const drawer = document.getElementById("want-item-drawer");
+      const nextOpen = !drawer.classList.contains("open");
+      setDrawerOpen("want-item-drawer", "btn-toggle-want-form", nextOpen);
+      if (nextOpen) {
+        document.getElementById("want-item-title").focus();
+      }
+    });
+  }
+  const cancelWantBtn = document.getElementById("btn-cancel-want-form");
+  if (cancelWantBtn) {
+    cancelWantBtn.addEventListener("click", () => {
+      setDrawerOpen("want-item-drawer", "btn-toggle-want-form", false);
+    });
+  }
+
+  function collectSetupFormMembers() {
+    const rows = Array.from(document.querySelectorAll(".member-editor-row"));
+    return rows
+      .map((r) => ({
+        member_id: r.dataset.memberId || null,
+        avatar: r.querySelector(".m-avatar").value.trim() || "🙂",
+        name: r.querySelector(".m-name").value.trim(),
+        role: r.querySelector(".m-role").value,
+        routine_notes: r.querySelector(".m-notes").value.trim(),
+      }))
+      .filter((m) => m.name.length >= 1);
+  }
 
   // Wire End-User Google Calendar Link & Google Approval Controls
   async function saveGcalLinkSetting(enableSync = true) {
@@ -826,6 +1004,27 @@
     gcalConnectBtn.addEventListener("click", async () => {
       clearBanner("gcal-feedback");
       try {
+        // Preserve any typed first-time household setup before leaving the page for Google OAuth
+        const typedName = document.getElementById("cfg-name").value.trim();
+        const typedMembers = collectSetupFormMembers();
+        if ((!appState.household || !appState.household.is_configured) && typedName.length >= 2 && typedMembers.length >= 1) {
+          const newPass = document.getElementById("cfg-passcode").value.trim();
+          await apiFetch("/api/household/setup", {
+            method: "PUT",
+            body: JSON.stringify({
+              household_name: typedName,
+              preferred_language: document.getElementById("cfg-language").value,
+              timezone: document.getElementById("cfg-timezone").value.trim(),
+              sports_music_buffer_min: Number(document.getElementById("cfg-buffer").value || 30),
+              new_passcode: newPass || null,
+              clear_passcode: false,
+              members: typedMembers,
+            }),
+          });
+          if (newPass) {
+            localStorage.setItem(PASSCODE_KEY, newPass);
+          }
+        }
         await saveGcalLinkSetting(true);
         const startRes = await apiFetch("/api/gcal/oauth/start");
         window.location.href = startRes.auth_url;
@@ -868,7 +1067,7 @@
     });
   }
 
-  // Wire Add Event Form
+  // Wire Add Event Form (no category field; auto-collapses drawer on save)
   document.getElementById("add-event-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     clearBanner("event-feedback");
@@ -888,7 +1087,6 @@
 
     const eventPayload = {
       title: document.getElementById("evt-title").value.trim(),
-      category: document.getElementById("evt-category").value,
       start_iso: startIso,
       end_iso: endIso,
       participants: participantsStr,
@@ -910,8 +1108,8 @@
       } catch (firstErr) {
         if (firstErr.detail && firstErr.detail.error_code === "OVERLAP_CONFIRMATION_REQUIRED") {
           const accepted = window.confirm(
-            `Schedule or 30-Min Arrival-Buffer Overlap Notice:\n\n${firstErr.detail.message}\n\n` +
-            `Overlaps are allowed on the Family Calendar (e.g. parallel kid activities). Do you want to add this event anyway?`
+            `Same-Member Overlap Notice:\n\n${firstErr.detail.message}\n\n` +
+            `Do you want to add this event anyway?`
           );
           if (!accepted) {
             showBanner(
@@ -930,6 +1128,7 @@
         }
       }
       e.target.reset();
+      setDrawerOpen("event-form-drawer", "btn-toggle-event-form", false);
       await loadFullState();
       const countMsg = res.occurrences_created > 1 ? ` (${res.occurrences_created} repetitions added)` : "";
       const overlapMsg = res.overlap_warnings && res.overlap_warnings.length ? " (overlap confirmed)" : "";
@@ -940,28 +1139,54 @@
     }
   });
 
-  // Wire Add Item Form
-  document.getElementById("add-item-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
+  // Wire Separate Collapsible '+' Forms for Need-To-Do and Want-To-Do
+  async function handleAddListItem(itemType, titleInputId, deadlineInputId, assignedSelectId, drawerId, btnId, formEl) {
     clearBanner("item-feedback");
     const active = getActiveMember();
     try {
       await apiFetch("/api/items", {
         method: "POST",
         body: JSON.stringify({
-          title: document.getElementById("item-title").value.trim(),
-          item_type: document.getElementById("item-type").value,
-          deadline_or_closing_date: document.getElementById("item-deadline").value || null,
-          assigned_to: document.getElementById("item-assigned").value,
+          title: document.getElementById(titleInputId).value.trim(),
+          item_type: itemType,
+          deadline_or_closing_date: document.getElementById(deadlineInputId).value || null,
+          assigned_to: document.getElementById(assignedSelectId).value,
           created_by: active.name,
         }),
       });
-      e.target.reset();
+      formEl.reset();
+      setDrawerOpen(drawerId, btnId, false);
       await loadFullState();
       showBanner("item-feedback", "Saved to shared list!", "success");
     } catch (err) {
       showBanner("item-feedback", err.message, "error");
     }
+  }
+
+  document.getElementById("add-need-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await handleAddListItem(
+      "NEED_TO_DO",
+      "need-item-title",
+      "need-item-deadline",
+      "need-item-assigned",
+      "need-item-drawer",
+      "btn-toggle-need-form",
+      e.target
+    );
+  });
+
+  document.getElementById("add-want-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    await handleAddListItem(
+      "WANT_TO_DO",
+      "want-item-title",
+      "want-item-deadline",
+      "want-item-assigned",
+      "want-item-drawer",
+      "btn-toggle-want-form",
+      e.target
+    );
   });
 
   // Wire Setup Form
@@ -972,14 +1197,11 @@
   document.getElementById("household-setup-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     clearBanner("setup-feedback");
-    const rows = Array.from(document.querySelectorAll(".member-editor-row"));
-    const members = rows.map((r) => ({
-      member_id: r.dataset.memberId || null,
-      avatar: r.querySelector(".m-avatar").value.trim() || "🙂",
-      name: r.querySelector(".m-name").value.trim(),
-      role: r.querySelector(".m-role").value,
-      routine_notes: r.querySelector(".m-notes").value.trim(),
-    }));
+    const members = collectSetupFormMembers();
+    if (!members.length) {
+      showBanner("setup-feedback", "Please enter at least one family member.", "error");
+      return;
+    }
 
     const newPass = document.getElementById("cfg-passcode").value.trim();
     try {
@@ -999,7 +1221,7 @@
         localStorage.setItem(PASSCODE_KEY, newPass);
       }
       await loadFullState();
-      showBanner("setup-feedback", "Family configuration saved! Everyone's profile pills are updated above.", "success");
+      switchTab("view-concierge");
     } catch (err) {
       showBanner("setup-feedback", err.message, "error");
     }
@@ -1007,14 +1229,8 @@
 
   document.getElementById("btn-clear-passcode").addEventListener("click", async (e) => {
     e.preventDefault();
-    const rows = Array.from(document.querySelectorAll(".member-editor-row"));
-    const members = rows.map((r) => ({
-      member_id: r.dataset.memberId || null,
-      avatar: r.querySelector(".m-avatar").value.trim() || "🙂",
-      name: r.querySelector(".m-name").value.trim(),
-      role: r.querySelector(".m-role").value,
-      routine_notes: r.querySelector(".m-notes").value.trim(),
-    }));
+    const members = collectSetupFormMembers();
+    if (!members.length) return;
     await apiFetch("/api/household/setup", {
       method: "PUT",
       body: JSON.stringify({
@@ -1030,6 +1246,29 @@
     await loadFullState();
     showBanner("setup-feedback", "Passcode lock removed.", "success");
   });
+
+  const resetHouseholdBtn = document.getElementById("btn-reset-household");
+  if (resetHouseholdBtn) {
+    resetHouseholdBtn.addEventListener("click", async () => {
+      const ok = window.confirm(
+        "Reset household configuration, local events, lists, and chats back to a brand-new user state?"
+      );
+      if (!ok) return;
+      try {
+        await apiFetch("/api/household/reset", { method: "POST" });
+        localStorage.removeItem(PASSCODE_KEY);
+        localStorage.removeItem(ACTIVE_MEMBER_KEY);
+        localStorage.removeItem(SESSION_KEY);
+        appState.messagesBySession = {};
+        appState.chatSessions = [];
+        appState.sessionId = `fam-session-${Math.random().toString(36).slice(2, 8)}`;
+        localStorage.setItem(SESSION_KEY, appState.sessionId);
+        await loadFullState(true);
+      } catch (err) {
+        showBanner("setup-feedback", err.message, "error");
+      }
+    });
+  }
 
   // Wire Multimodal Controls (Upload, Mic, Paste, Drag-and-Drop)
   const fileInput = document.getElementById("chat-file-input");

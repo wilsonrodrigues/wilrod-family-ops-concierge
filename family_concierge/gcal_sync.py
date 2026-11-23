@@ -458,19 +458,8 @@ def _to_local_naive_iso(gcal_time_obj: dict[str, Any], tz_obj: ZoneInfo, is_end:
     return datetime.now(tz_obj).strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def _infer_category(summary: str, priv_props: dict[str, Any]) -> str:
-    explicit = str(priv_props.get("category") or "").strip()
-    if explicit in ("school_exam", "sports", "music", "birthday_party", "family_outing", "errand", "other"):
-        return explicit
-    if _SPORTS_KEYWORDS_RE.search(summary):
-        return "sports"
-    if _MUSIC_KEYWORDS_RE.search(summary):
-        return "music"
-    if "birthday" in summary.lower() or "anivers" in summary.lower():
-        return "birthday_party"
-    if "exam" in summary.lower() or "prova" in summary.lower():
-        return "school_exam"
-    return "other"
+def _has_sports_or_music_keywords(summary: str) -> bool:
+    return bool(_SPORTS_KEYWORDS_RE.search(summary or "") or _MUSIC_KEYWORDS_RE.search(summary or ""))
 
 
 def _map_gcal_item_to_record(item: dict[str, Any], tz_obj: ZoneInfo, configured_buffer: int) -> dict[str, Any]:
@@ -486,13 +475,18 @@ def _map_gcal_item_to_record(item: dict[str, Any], tz_obj: ZoneInfo, configured_
         participants = str(priv.get("participants") or "All").strip() or "All"
         formatted_title = f"[{participants}] {raw_summary}"
 
-    start_iso = _to_local_naive_iso(item.get("start") or {}, tz_obj, is_end=False)
+    raw_start_obj = item.get("start") or {}
+    is_all_day = bool(raw_start_obj.get("date") and not raw_start_obj.get("dateTime"))
+    start_iso = _to_local_naive_iso(raw_start_obj, tz_obj, is_end=False)
     end_iso = _to_local_naive_iso(item.get("end") or {}, tz_obj, is_end=True)
-    category = _infer_category(raw_summary, priv)
 
-    buf_min = int(priv["buffer_minutes"]) if str(priv.get("buffer_minutes", "")).isdigit() else (
-        configured_buffer if category in ("sports", "music") else 0
-    )
+    if is_all_day:
+        buf_min = 0
+    elif str(priv.get("buffer_minutes", "")).isdigit():
+        buf_min = int(priv["buffer_minutes"])
+    else:
+        buf_min = configured_buffer if _has_sports_or_music_keywords(raw_summary) else 0
+
     try:
         buf_dt = datetime.fromisoformat(start_iso) - timedelta(minutes=buf_min)
         buffer_start_iso = buf_dt.strftime("%Y-%m-%dT%H:%M:%S")
@@ -515,7 +509,7 @@ def _map_gcal_item_to_record(item: dict[str, Any], tz_obj: ZoneInfo, configured_
         "start_iso": start_iso,
         "end_iso": end_iso,
         "buffer_start_iso": buffer_start_iso,
-        "category": category,
+        "is_all_day": is_all_day,
         "participants": participants,
         "location": str(item.get("location") or ""),
         "created_by": created_by,
@@ -530,7 +524,7 @@ def query_gcal_events(
     participant_filter: Optional[str] = None,
     service: Optional[Any] = None,
 ) -> list[dict[str, Any]]:
-    """Lists single and expanded recurring events directly from the linked Google Calendar."""
+    """Lists single and expanded recurring events directly from the linked Google Calendar (today onwards)."""
     cal_id = resolve_target_calendar_id()
     tz_name, tz_obj, configured_buffer = _household_tz_and_buffer()
 
@@ -541,13 +535,14 @@ def query_gcal_events(
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
 
     now_local = datetime.now(tz_obj)
+    today_midnight = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
     if date_filter:
         day_start = datetime.strptime(date_filter, "%Y-%m-%d").replace(tzinfo=tz_obj)
         time_min = day_start.isoformat()
         time_max = (day_start + timedelta(days=1)).isoformat()
     else:
-        time_min = (now_local - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        time_max = (now_local + timedelta(days=240)).replace(hour=23, minute=59, second=59, microsecond=0).isoformat()
+        time_min = today_midnight.isoformat()
+        time_max = (today_midnight + timedelta(days=240)).replace(hour=23, minute=59, second=59, microsecond=0).isoformat()
 
     raw_items: list[dict[str, Any]] = []
     page_token: Optional[str] = None
@@ -576,6 +571,9 @@ def query_gcal_events(
     mapped = [_map_gcal_item_to_record(it, tz_obj, configured_buffer) for it in raw_items]
     if date_filter:
         mapped = [ev for ev in mapped if ev["start_iso"].startswith(date_filter)]
+    else:
+        today_str = today_midnight.strftime("%Y-%m-%d")
+        mapped = [ev for ev in mapped if ev["end_iso"][:10] >= today_str]
     if participant_filter and participant_filter.strip():
         needle = participant_filter.strip().lower()
         mapped = [
@@ -629,7 +627,6 @@ def insert_gcal_event(
     end_iso: str,
     buffer_start_iso: str,
     buffer_minutes: int,
-    category: str,
     participants: str,
     location: str,
     recurrence: str,
@@ -667,7 +664,6 @@ def insert_gcal_event(
         "extendedProperties": {
             "private": {
                 "app": "family-ops-concierge",
-                "category": category,
                 "participants": participants,
                 "created_by": created_by,
                 "buffer_minutes": str(buffer_minutes),

@@ -70,10 +70,12 @@ def _conflict_advisor_instruction(_ctx: ReadonlyContext) -> str:
 
 You are the Schedule Conflict & Buffer Advisor (Pro tier).
 1. Inspect the household roster (`get_family_household_profile`) and target date (`list_family_calendar_events`).
-2. Identify any direct time overlaps or 30-min sports/music arrival-buffer overlaps relative to TODAY'S EXACT LOCAL DATE.
-3. Remember: overlaps on a family calendar (e.g. two kids having simultaneous activities) and 30-min arrival buffers are
-   non-blocking warnings, NOT forbidden! Start any overlap notice on its own line with `⚠️ Warning:`, and present both:
-   (a) keeping the requested slot with a clear logistics/carpool note, and (b) 1-2 alternative conflict-free slots formatted
+2. Identify any direct time overlaps or arrival-buffer overlaps ONLY for the SAME family member (or `[All]`) relative to TODAY'S EXACT LOCAL DATE.
+   - Events belonging to different family members do NOT conflict.
+   - Full-day / all-day events (`is_all_day=True` or `00:00-23:59`) NEVER count as conflicts.
+3. Remember: even same-member overlaps are non-blocking warnings, NOT forbidden! Start any overlap notice on its own line with
+   `⚠️ Warning:`, and present both:
+   (a) keeping the requested slot with a clear logistics note, and (b) 1-2 alternative conflict-free slots formatted
    with `[Participant]` or `[All]`.
 4. End with `👉 Action Needed: **<bold question asking which option the user prefers>**` and a `[QUICK_REPLIES: ...]` line.
 5. Reply concisely in the user's language (English or Portuguese) using regular `-` hyphens (no long dashes)."""
