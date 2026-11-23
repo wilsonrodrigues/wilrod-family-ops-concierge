@@ -8,6 +8,8 @@
     members: [],
     events: [],
     items: [],
+    gcal: {},
+    gcalCalendars: [],
     chatSessions: [],
     messagesBySession: {}, // { [sessionId]: Array<message> }
     activeMemberId: localStorage.getItem(ACTIVE_MEMBER_KEY) || "",
@@ -113,8 +115,12 @@
       year: "numeric",
     });
     document.getElementById("household-title").textContent = hh.household_name || "Family Ops Concierge";
+    const gcalSuffix =
+      appState.gcal && appState.gcal.active_sync
+        ? ` | 📅 Google Calendar: ${appState.gcal.calendar_summary || appState.gcal.calendar_id}`
+        : "";
     document.getElementById("household-rules-summary").textContent =
-      `Today: ${todayFormatted} | Arrival buffer: ${hh.sports_music_buffer_min ?? 30} min`;
+      `Today: ${todayFormatted} | Arrival buffer: ${hh.sports_music_buffer_min ?? 30} min${gcalSuffix}`;
 
     const active = getActiveMember();
     appState.activeMemberId = active.member_id;
@@ -417,6 +423,77 @@
     const listEl = document.getElementById("setup-members-list");
     listEl.innerHTML = "";
     appState.members.forEach((m) => appendMemberSetupRow(m));
+
+    renderGcalSetupCard();
+  }
+
+  function renderGcalSetupCard() {
+    const g = appState.gcal || {};
+    const statusPill = document.getElementById("gcal-status-pill");
+    const linkInput = document.getElementById("gcal-link-input");
+    const pickerGroup = document.getElementById("gcal-picker-group");
+    const connectBtn = document.getElementById("btn-gcal-connect");
+    const saveBtn = document.getElementById("btn-gcal-save");
+    const disconnectBtn = document.getElementById("btn-gcal-disconnect");
+
+    if (!statusPill) return;
+
+    if (g.active_sync) {
+      statusPill.className = "gcal-status-pill connected";
+      const acct = g.connected_email ? ` (${g.connected_email})` : "";
+      statusPill.textContent = `● Connected: ${g.calendar_summary || "Family Calendar"}${acct}`;
+    } else if (g.is_connected) {
+      statusPill.className = "gcal-status-pill connected";
+      statusPill.textContent = `● Connected${g.connected_email ? `: ${g.connected_email}` : ""}`;
+    } else {
+      statusPill.className = "gcal-status-pill";
+      statusPill.textContent = "Not connected";
+    }
+
+    if (linkInput && document.activeElement !== linkInput) {
+      linkInput.value = g.calendar_link_input || g.calendar_id || "";
+    }
+
+    if (connectBtn) {
+      connectBtn.textContent = g.is_connected
+        ? "Switch Google Account"
+        : "Connect & Approve with Google";
+    }
+    if (saveBtn) {
+      saveBtn.style.display = g.is_connected ? "inline-flex" : "none";
+    }
+    if (disconnectBtn) {
+      disconnectBtn.style.display = g.is_connected ? "inline-flex" : "none";
+    }
+    if (pickerGroup) {
+      pickerGroup.style.display = g.is_connected && appState.gcalCalendars.length > 0 ? "flex" : "none";
+    }
+  }
+
+  async function refreshGcalCalendarsDropdown() {
+    if (!appState.gcal || !appState.gcal.is_connected) return;
+    const selectEl = document.getElementById("gcal-calendar-picker");
+    const pickerGroup = document.getElementById("gcal-picker-group");
+    if (!selectEl) return;
+    try {
+      const data = await apiFetch("/api/gcal/calendars");
+      appState.gcalCalendars = data.calendars || [];
+      selectEl.innerHTML = `<option value="">-- Choose a calendar from your account --</option>`;
+      appState.gcalCalendars.forEach((c) => {
+        const opt = document.createElement("option");
+        opt.value = c.calendar_id;
+        opt.textContent = `${c.summary}${c.primary ? " (Personal)" : ""}`;
+        if (appState.gcal && c.calendar_id === appState.gcal.calendar_id) {
+          opt.selected = true;
+        }
+        selectEl.appendChild(opt);
+      });
+      if (pickerGroup) {
+        pickerGroup.style.display = appState.gcalCalendars.length > 0 ? "flex" : "none";
+      }
+    } catch (_err) {
+      // Keep UI clean; dropdown stays hidden if listing fails
+    }
   }
 
   function appendMemberSetupRow(member = {}) {
@@ -473,7 +550,28 @@
     appState.members = data.members;
     appState.events = data.events;
     appState.items = data.items;
+    appState.gcal = data.gcal || appState.gcal || {};
     appState.chatSessions = data.chat_sessions || [];
+
+    if (initialBootstrap) {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("gcal_connected") === "1") {
+        switchTab("view-setup");
+        showBanner(
+          "gcal-feedback",
+          "Personal Google account connected! Verify or pick your shared Family Calendar below.",
+          "success"
+        );
+        window.history.replaceState({}, "", window.location.pathname);
+      } else if (params.get("gcal_error")) {
+        switchTab("view-setup");
+        showBanner("gcal-feedback", `Google OAuth failed: ${params.get("gcal_error")}`, "error");
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+      if (appState.gcal && appState.gcal.is_connected) {
+        refreshGcalCalendarsDropdown();
+      }
+    }
 
     if (initialBootstrap) {
       const existingMatch = appState.chatSessions.find((s) => s.session_id === appState.sessionId);
@@ -693,6 +791,82 @@
   document.getElementById("btn-close-setup").addEventListener("click", () => {
     switchTab("view-concierge");
   });
+
+  // Wire End-User Google Calendar Link & Google Approval Controls
+  async function saveGcalLinkSetting(enableSync = true) {
+    const linkVal = document.getElementById("gcal-link-input").value.trim();
+    const res = await apiFetch("/api/gcal/config", {
+      method: "PUT",
+      body: JSON.stringify({
+        enabled: enableSync,
+        calendar_link_or_id: linkVal,
+      }),
+    });
+    appState.gcal = res.gcal || {};
+    appState.events = res.events || appState.events;
+    renderAll();
+    return res;
+  }
+
+  const gcalSaveBtn = document.getElementById("btn-gcal-save");
+  if (gcalSaveBtn) {
+    gcalSaveBtn.addEventListener("click", async () => {
+      clearBanner("gcal-feedback");
+      try {
+        await saveGcalLinkSetting(true);
+        showBanner("gcal-feedback", "Family Google Calendar updated!", "success");
+      } catch (err) {
+        showBanner("gcal-feedback", err.message, "error");
+      }
+    });
+  }
+
+  const gcalConnectBtn = document.getElementById("btn-gcal-connect");
+  if (gcalConnectBtn) {
+    gcalConnectBtn.addEventListener("click", async () => {
+      clearBanner("gcal-feedback");
+      try {
+        await saveGcalLinkSetting(true);
+        const startRes = await apiFetch("/api/gcal/oauth/start");
+        window.location.href = startRes.auth_url;
+      } catch (err) {
+        showBanner("gcal-feedback", err.message, "error");
+      }
+    });
+  }
+
+  const gcalPickerEl = document.getElementById("gcal-calendar-picker");
+  if (gcalPickerEl) {
+    gcalPickerEl.addEventListener("change", async () => {
+      if (gcalPickerEl.value) {
+        document.getElementById("gcal-link-input").value = gcalPickerEl.value;
+        clearBanner("gcal-feedback");
+        try {
+          await saveGcalLinkSetting(true);
+          showBanner("gcal-feedback", "Switched active Family Google Calendar!", "success");
+        } catch (err) {
+          showBanner("gcal-feedback", err.message, "error");
+        }
+      }
+    });
+  }
+
+  const gcalDisconnectBtn = document.getElementById("btn-gcal-disconnect");
+  if (gcalDisconnectBtn) {
+    gcalDisconnectBtn.addEventListener("click", async () => {
+      clearBanner("gcal-feedback");
+      try {
+        const res = await apiFetch("/api/gcal/disconnect", { method: "POST" });
+        appState.gcal = res.gcal || {};
+        appState.gcalCalendars = [];
+        appState.events = res.events || [];
+        renderAll();
+        showBanner("gcal-feedback", "Google Calendar disconnected.", "success");
+      } catch (err) {
+        showBanner("gcal-feedback", err.message, "error");
+      }
+    });
+  }
 
   // Wire Add Event Form
   document.getElementById("add-event-form").addEventListener("submit", async (e) => {

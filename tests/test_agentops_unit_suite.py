@@ -356,6 +356,8 @@ def test_observability_pii_redaction_and_secret_manager(
     )
     assert mock_sm.access_secret_version.call_count == 1
     clear_secret_cache()
+    monkeypatch.setenv("USE_SECRET_MANAGER", "0")
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
 
     # 2. PII Redaction across logs, memory SQLite rows, and Cloud DLP client
     mock_dlp = MagicMock()
@@ -446,3 +448,149 @@ def test_observability_pii_redaction_and_secret_manager(
     assert ok_resp.status_code == 200
     assert ok_resp.json()["status"] == "success"
     assert len(ok_resp.json()["overlap_warnings"]) >= 1
+
+
+def test_google_calendar_link_parser_rrule_and_sync_adapter(isolated_household_env: Path) -> None:
+    """Verifies Google Calendar URL parsing, OAuth config endpoints, and native RRULE read/write/delete."""
+    del isolated_household_env
+    import base64
+    from app.server import app as fastapi_app
+    from family_concierge import gcal_sync
+
+    # 1. Link parser supports embed ?src=, base64 ?cid=, /ical/, and raw IDs
+    assert (
+        gcal_sync.parse_google_calendar_link(
+            "https://calendar.google.com/calendar/embed?src=family999%40group.calendar.google.com&ctz=America%2FSao_Paulo"
+        )
+        == "family999@group.calendar.google.com"
+    )
+    cid_b64 = base64.urlsafe_b64encode(b"family999@group.calendar.google.com").decode("ascii").rstrip("=")
+    assert (
+        gcal_sync.parse_google_calendar_link(f"https://calendar.google.com/calendar/u/0?cid={cid_b64}")
+        == "family999@group.calendar.google.com"
+    )
+    assert (
+        gcal_sync.parse_google_calendar_link(
+            "https://calendar.google.com/calendar/ical/family999%40group.calendar.google.com/public/basic.ics"
+        )
+        == "family999@group.calendar.google.com"
+    )
+    assert gcal_sync.parse_google_calendar_link("family999@group.calendar.google.com") == "family999@group.calendar.google.com"
+
+    # 2. Native RFC-5545 RRULE with 30 occurrences
+    assert gcal_sync.build_rrule_for_recurrence("WEEKLY", 30) == ["RRULE:FREQ=WEEKLY;COUNT=30"]
+    assert gcal_sync.build_rrule_for_recurrence("BIWEEKLY", 30) == ["RRULE:FREQ=WEEKLY;INTERVAL=2;COUNT=30"]
+    assert gcal_sync.build_rrule_for_recurrence("NONE", 1) == []
+
+    # 3. OAuth client_secret.json parser & FastAPI Setup config endpoints
+    sample_client_json = json.dumps(
+        {
+            "web": {
+                "client_id": "12345-synth.apps.googleusercontent.com",
+                "client_secret": "GOCSPX-syntheticSecretForUnitTest",
+            }
+        }
+    )
+    cid, csec = gcal_sync.parse_oauth_client_json_blob(sample_client_json)
+    assert cid == "12345-synth.apps.googleusercontent.com"
+    assert csec == "GOCSPX-syntheticSecretForUnitTest"
+
+    client = TestClient(fastapi_app)
+    cfg_resp = client.put(
+        "/api/gcal/config",
+        json={
+            "enabled": True,
+            "calendar_link_or_id": "https://calendar.google.com/calendar/embed?src=family999%40group.calendar.google.com",
+            "oauth_client_json": sample_client_json,
+        },
+    )
+    assert cfg_resp.status_code == 200
+    gcal_meta = cfg_resp.json()["gcal"]
+    assert gcal_meta["has_oauth_client"] is True
+    assert gcal_meta["calendar_id"] == "family999@group.calendar.google.com"
+    assert "oauth_client_secret" not in gcal_meta
+
+    start_resp = client.get("/api/gcal/oauth/start")
+    assert start_resp.status_code == 200
+    assert "accounts.google.com" in start_resp.json()["auth_url"]
+
+    # 4. Mocked Google Calendar API v3 insert + list + series delete
+    mock_svc = MagicMock()
+    mock_svc.events.return_value.insert.return_value.execute.return_value = {
+        "id": "gcal-master-001",
+        "summary": "[Kid1] Piano Class",
+        "start": {"dateTime": "2026-12-09T17:00:00-03:00"},
+        "end": {"dateTime": "2026-12-09T18:00:00-03:00"},
+        "recurrence": ["RRULE:FREQ=WEEKLY;COUNT=30"],
+        "extendedProperties": {
+            "private": {
+                "category": "music",
+                "participants": "Kid1",
+                "created_by": "Papa",
+                "buffer_minutes": "30",
+                "recurrence": "WEEKLY",
+            }
+        },
+        "created": "2026-11-22T23:00:00Z",
+    }
+    rec, ser_id, last_iso = gcal_sync.insert_gcal_event(
+        title="[Kid1] Piano Class",
+        start_iso="2026-12-09T17:00:00",
+        end_iso="2026-12-09T18:00:00",
+        buffer_start_iso="2026-12-09T16:30:00",
+        buffer_minutes=30,
+        category="music",
+        participants="Kid1",
+        location="",
+        recurrence="WEEKLY",
+        occurrences=30,
+        created_by="Papa",
+        notes="",
+        service=mock_svc,
+    )
+    sent_body = mock_svc.events.return_value.insert.call_args.kwargs["body"]
+    assert sent_body["recurrence"] == ["RRULE:FREQ=WEEKLY;COUNT=30"]
+    assert ser_id == "gcal-master-001"
+    assert rec["buffer_start_iso"] == "2026-12-09T16:30:00"
+    assert last_iso > "2027-06-01"
+
+    mock_svc.events.return_value.list.return_value.execute.return_value = {
+        "items": [
+            {
+                "id": "gcal-master-001_20261209T200000Z",
+                "recurringEventId": "gcal-master-001",
+                "summary": "[Kid1] Piano Class",
+                "start": {"dateTime": "2026-12-09T17:00:00-03:00"},
+                "end": {"dateTime": "2026-12-09T18:00:00-03:00"},
+                "extendedProperties": {
+                    "private": {
+                        "category": "music",
+                        "participants": "Kid1",
+                        "buffer_minutes": "30",
+                    }
+                },
+            }
+        ]
+    }
+    listed = gcal_sync.query_gcal_events(date_filter="2026-12-09", service=mock_svc)
+    assert len(listed) == 1
+    assert listed[0]["series_id"] == "gcal-master-001"
+    assert listed[0]["start_iso"] == "2026-12-09T17:00:00"
+
+    mock_svc.events.return_value.get.return_value.execute.return_value = {
+        "id": "gcal-master-001_20261209T200000Z",
+        "recurringEventId": "gcal-master-001",
+        "summary": "[Kid1] Piano Class",
+        "start": {"dateTime": "2026-12-09T17:00:00-03:00"},
+        "end": {"dateTime": "2026-12-09T18:00:00-03:00"},
+    }
+    deleted = gcal_sync.delete_gcal_event(
+        "gcal-master-001_20261209T200000Z",
+        delete_series=True,
+        service=mock_svc,
+    )
+    assert deleted is not None and deleted["deleted_count"] == 30
+    mock_svc.events.return_value.delete.assert_called_with(
+        calendarId="family999@group.calendar.google.com",
+        eventId="gcal-master-001",
+    )

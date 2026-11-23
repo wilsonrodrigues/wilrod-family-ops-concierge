@@ -11,7 +11,7 @@ from google.adk.features import FeatureName, override_feature_enabled
 from google.adk.tools import FunctionTool, ToolContext
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import store
+from . import gcal_sync, store
 
 # Activate ADK framework-level Pydantic argument & JSON schema validation on all FunctionTools
 override_feature_enabled(FeatureName.JSON_SCHEMA_FOR_FUNC_DECL, True)
@@ -523,7 +523,7 @@ def list_family_calendar_events(
                 recovery_hint="Pass date_filter in strict YYYY-MM-DD format (e.g. '2026-12-05') or omit it.",
             )
 
-    events = store.query_events(
+    events = gcal_sync.query_active_calendar_events(
         date_filter=validated_filter.date_filter,
         participant_filter=validated_filter.participant_filter,
     )
@@ -709,6 +709,42 @@ def schedule_family_calendar_event(
             ),
         )
 
+    if gcal_sync.is_gcal_sync_active():
+        first_buf_iso = (first_start - timedelta(minutes=buffer_minutes)).strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            gcal_record, gcal_series_id, gcal_last_start = gcal_sync.insert_gcal_event(
+                title=bracketed_title,
+                start_iso=first_start.strftime("%Y-%m-%dT%H:%M:%S"),
+                end_iso=first_end.strftime("%Y-%m-%dT%H:%M:%S"),
+                buffer_start_iso=first_buf_iso,
+                buffer_minutes=buffer_minutes,
+                category=validated.category,
+                participants=normalized_participants,
+                location=cleaned_location,
+                recurrence=validated.recurrence,
+                occurrences=total_count,
+                created_by=author,
+                notes=validated.notes or "",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _guided_error(
+                error_code="GOOGLE_CALENDAR_API_ERROR",
+                message=f"Failed to write event to Google Calendar: {exc}",
+                recovery_hint=(
+                    "Check Family Setup -> Google Calendar Integration to confirm the personal Google account "
+                    "is connected and has write permission on the selected shared calendar."
+                ),
+            )
+        return ScheduleEventOutput(
+            occurrences_created=total_count,
+            recurrence=validated.recurrence,
+            series_id=gcal_series_id,
+            buffer_applied_minutes=buffer_minutes,
+            overlap_warnings=overlap_warnings,
+            event=CalendarEventRecordSchema.model_validate(gcal_record),
+            last_occurrence_start_iso=gcal_last_start,
+        ).model_dump()
+
     to_insert: list[dict[str, Any]] = []
     for idx in range(total_count):
         occ_start = _advance_datetime(first_start, validated.recurrence, idx)
@@ -772,7 +808,20 @@ def delete_family_calendar_event(
             recovery_hint="Call list_family_calendar_events first to obtain a valid event_id.",
         )
 
-    removed = store.delete_event_by_id(validated.event_id, delete_series=validated.delete_entire_series)
+    if gcal_sync.is_gcal_sync_active():
+        try:
+            removed = gcal_sync.delete_gcal_event(
+                validated.event_id,
+                delete_series=validated.delete_entire_series,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _guided_error(
+                error_code="GOOGLE_CALENDAR_API_ERROR",
+                message=f"Failed to delete event from Google Calendar: {exc}",
+                recovery_hint="Call list_family_calendar_events first to verify the active Google Calendar event_id.",
+            )
+    else:
+        removed = store.delete_event_by_id(validated.event_id, delete_series=validated.delete_entire_series)
     if removed is None:
         return _guided_error(
             error_code="EVENT_ID_NOT_FOUND",
@@ -959,7 +1008,7 @@ def find_calendar_overlaps(
     total_count = 1 if rec_mode == "NONE" else max(1, min(int(occurrences or 1), 60))
 
     existing_by_day: dict[str, list[dict[str, Any]]] = {}
-    for ev in store.query_events():
+    for ev in gcal_sync.query_active_calendar_events():
         existing_by_day.setdefault(ev["start_iso"][:10], []).append(ev)
 
     warnings: list[str] = []

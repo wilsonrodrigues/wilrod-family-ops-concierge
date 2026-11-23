@@ -19,6 +19,7 @@ locals {
     "run.googleapis.com",
     "secretmanager.googleapis.com",
     "artifactregistry.googleapis.com",
+    "calendar-json.googleapis.com",
     "dlp.googleapis.com",
     "cloudtrace.googleapis.com",
     "logging.googleapis.com",
@@ -58,6 +59,22 @@ resource "google_secret_manager_secret" "gemini_api_key" {
 
 resource "google_secret_manager_secret_iam_member" "concierge_secret_accessor" {
   secret_id = google_secret_manager_secret.gemini_api_key.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.concierge_runtime_sa.email}"
+}
+
+resource "google_secret_manager_secret" "gcal_oauth_client_secret" {
+  secret_id = var.gcal_oauth_secret_id
+
+  replication {
+    auto {}
+  }
+
+  depends_on = [google_project_service.enabled_apis]
+}
+
+resource "google_secret_manager_secret_iam_member" "concierge_gcal_secret_accessor" {
+  secret_id = google_secret_manager_secret.gcal_oauth_client_secret.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.concierge_runtime_sa.email}"
 }
@@ -128,6 +145,36 @@ resource "google_cloud_run_v2_service" "family_ops_concierge" {
       }
 
       env {
+        name  = "GOOGLE_OAUTH_CLIENT_ID"
+        value = var.google_oauth_client_id
+      }
+
+      env {
+        name  = "GOOGLE_OAUTH_CLIENT_SECRET_SECRET"
+        value = google_secret_manager_secret.gcal_oauth_client_secret.secret_id
+      }
+
+      env {
+        name  = "GOOGLE_CALENDAR_ID"
+        value = var.google_calendar_id
+      }
+
+      env {
+        name  = "FAMILY_MODEL_FAST"
+        value = var.family_model_fast
+      }
+
+      env {
+        name  = "FAMILY_MODEL_FLASH"
+        value = var.family_model_flash
+      }
+
+      env {
+        name  = "FAMILY_MODEL_PRO"
+        value = var.family_model_pro
+      }
+
+      env {
         name = "GOOGLE_API_KEY"
         value_source {
           secret_key_ref {
@@ -151,6 +198,7 @@ resource "google_cloud_run_v2_service" "family_ops_concierge" {
 
   depends_on = [
     google_secret_manager_secret_iam_member.concierge_secret_accessor,
+    google_secret_manager_secret_iam_member.concierge_gcal_secret_accessor,
     google_project_service.enabled_apis,
   ]
 }

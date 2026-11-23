@@ -19,9 +19,14 @@ def get_db_path() -> str:
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(get_db_path(), check_same_thread=False)
+    db_path = Path(get_db_path())
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
+    journal_mode = os.environ.get("FAMILY_SQLITE_JOURNAL_MODE", "WAL").strip().upper()
+    if journal_mode not in ("WAL", "DELETE", "TRUNCATE", "MEMORY"):
+        journal_mode = "WAL"
+    conn.execute(f"PRAGMA journal_mode={journal_mode};")
     conn.execute("PRAGMA foreign_keys=ON;")
     return conn
 
@@ -129,6 +134,26 @@ def init_db() -> None:
                 models_json TEXT NOT NULL DEFAULT '[]',
                 tool_calls_json TEXT NOT NULL DEFAULT '[]',
                 pending_confirmations_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS gcal_integration (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                enabled INTEGER NOT NULL DEFAULT 0,
+                calendar_link_input TEXT NOT NULL DEFAULT '',
+                calendar_id TEXT NOT NULL DEFAULT '',
+                calendar_summary TEXT NOT NULL DEFAULT '',
+                connected_email TEXT NOT NULL DEFAULT '',
+                oauth_client_id TEXT NOT NULL DEFAULT '',
+                oauth_client_secret TEXT NOT NULL DEFAULT '',
+                oauth_tokens_json TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS gcal_oauth_states (
+                state_token TEXT PRIMARY KEY,
+                code_verifier TEXT NOT NULL DEFAULT '',
+                redirect_uri TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
             );
             """
@@ -897,5 +922,92 @@ def delete_chat_session_record(session_id: str) -> bool:
     with _connect() as conn:
         cur = conn.execute("DELETE FROM chat_sessions WHERE session_id = ?", (session_id,))
         return cur.rowcount > 0
+
+
+def get_gcal_integration_row() -> dict[str, Any]:
+    """Returns internal Google Calendar integration config row (contains secrets - never expose raw)."""
+    init_db()
+    with _connect() as conn:
+        row = conn.execute("SELECT * FROM gcal_integration WHERE id = 1").fetchone()
+        if row is None:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                "INSERT INTO gcal_integration (id, enabled, updated_at) VALUES (1, 0, ?)",
+                (now_iso,),
+            )
+            row = conn.execute("SELECT * FROM gcal_integration WHERE id = 1").fetchone()
+        return dict(row)  # type: ignore[arg-type]
+
+
+def save_gcal_integration_row(**updates: Any) -> dict[str, Any]:
+    """Updates one or more columns on `gcal_integration` (`id = 1`) and returns the updated row."""
+    current = get_gcal_integration_row()
+    merged = {**current, **updates, "updated_at": datetime.now(timezone.utc).isoformat()}
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE gcal_integration
+            SET enabled = ?,
+                calendar_link_input = ?,
+                calendar_id = ?,
+                calendar_summary = ?,
+                connected_email = ?,
+                oauth_client_id = ?,
+                oauth_client_secret = ?,
+                oauth_tokens_json = ?,
+                updated_at = ?
+            WHERE id = 1
+            """,
+            (
+                1 if merged.get("enabled") else 0,
+                str(merged.get("calendar_link_input") or ""),
+                str(merged.get("calendar_id") or ""),
+                str(merged.get("calendar_summary") or ""),
+                str(merged.get("connected_email") or ""),
+                str(merged.get("oauth_client_id") or ""),
+                str(merged.get("oauth_client_secret") or ""),
+                str(merged.get("oauth_tokens_json") or ""),
+                merged["updated_at"],
+            ),
+        )
+    return get_gcal_integration_row()
+
+
+def save_oauth_state(state_token: str, code_verifier: str, redirect_uri: str) -> None:
+    """Stores a one-time OAuth 2.0 CSRF `state_token` and PKCE `code_verifier`."""
+    init_db()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        # Keep table bounded by pruning older state rows beyond the 20 most recent
+        conn.execute(
+            """
+            DELETE FROM gcal_oauth_states
+            WHERE state_token NOT IN (
+                SELECT state_token FROM gcal_oauth_states ORDER BY created_at DESC LIMIT 20
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO gcal_oauth_states (state_token, code_verifier, redirect_uri, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (state_token, code_verifier, redirect_uri, now_iso),
+        )
+
+
+def pop_oauth_state(state_token: str) -> Optional[dict[str, str]]:
+    """Atomically retrieves and deletes a stored OAuth 2.0 CSRF + PKCE state row."""
+    init_db()
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT state_token, code_verifier, redirect_uri FROM gcal_oauth_states WHERE state_token = ?",
+            (state_token,),
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute("DELETE FROM gcal_oauth_states WHERE state_token = ?", (state_token,))
+        return dict(row)
+
 
 

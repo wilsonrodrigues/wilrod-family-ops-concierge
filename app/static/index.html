@@ -283,6 +283,40 @@
             </div>
           </form>
         </div>
+
+        <div class="surface-card" id="gcal-setup-card">
+          <div class="section-header">
+            <div>
+              <h2>Family Google Calendar</h2>
+              <p class="section-desc">Add your shared Google Calendar link and approve access with your Google account so everyone's schedule stays in sync.</p>
+            </div>
+            <span class="gcal-status-pill" id="gcal-status-pill">Not connected</span>
+          </div>
+
+          <div class="feedback-banner" id="gcal-feedback"></div>
+
+          <div class="form-grid">
+            <div class="field-group full-width">
+              <label for="gcal-link-input">Google Calendar Link</label>
+              <input
+                type="text"
+                id="gcal-link-input"
+                placeholder="Paste your Google Calendar share or embed link (https://calendar.google.com/...)"
+              />
+            </div>
+
+            <div class="field-group full-width" id="gcal-picker-group" style="display: none;">
+              <label for="gcal-calendar-picker">Active Calendar</label>
+              <select id="gcal-calendar-picker"></select>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px;">
+            <button type="button" class="btn btn-primary" id="btn-gcal-connect">Connect & Approve with Google</button>
+            <button type="button" class="btn btn-secondary" id="btn-gcal-save" style="display: none;">Update Calendar Link</button>
+            <button type="button" class="btn btn-ghost-danger" id="btn-gcal-disconnect" style="display: none;">Disconnect</button>
+          </div>
+        </div>
       </section>
     </main>
   </div>

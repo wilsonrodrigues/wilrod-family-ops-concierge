@@ -20,6 +20,7 @@ from google.cloud import secretmanager
 logger = logging.getLogger(__name__)
 
 _SECRET_CACHE: dict[str, str] = {}
+_SECRET_MISS_CACHE: set[str] = set()
 _CACHE_LOCK = threading.Lock()
 
 
@@ -66,16 +67,22 @@ def fetch_secret_from_gcp(
     with _CACHE_LOCK:
         if resource_name in _SECRET_CACHE:
             return _SECRET_CACHE[resource_name]
+        if client is None and resource_name in _SECRET_MISS_CACHE:
+            return None
 
     try:
         sm_client = client or secretmanager.SecretManagerServiceClient()
-        response = sm_client.access_secret_version(request={"name": resource_name})
+        response = sm_client.access_secret_version(request={"name": resource_name}, timeout=4.0)
         secret_value = response.payload.data.decode("utf-8").strip()
         if secret_value:
             with _CACHE_LOCK:
                 _SECRET_CACHE[resource_name] = secret_value
+                _SECRET_MISS_CACHE.discard(resource_name)
             return secret_value
     except Exception as exc:  # noqa: BLE001
+        with _CACHE_LOCK:
+            if client is None:
+                _SECRET_MISS_CACHE.add(resource_name)
         logger.warning(
             "Secret Manager lookup skipped/failed for '%s' (%s); checking environment fallback.",
             resource_name,
@@ -144,3 +151,4 @@ def clear_secret_cache() -> None:
     """Clears cached Secret Manager values (used in unit tests and key rotation)."""
     with _CACHE_LOCK:
         _SECRET_CACHE.clear()
+        _SECRET_MISS_CACHE.clear()

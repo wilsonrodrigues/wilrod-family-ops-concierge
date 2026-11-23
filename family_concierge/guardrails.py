@@ -76,7 +76,7 @@ _PROMPT_INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 
 # Output secret / credential leak patterns scrubbed during `after_model_callback` self-evaluation
 _SECRET_LEAK_RE = re.compile(
-    r"((?:AIza)[0-9A-Za-z_-]{30,}|ya29\.[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z]{20,})"
+    r"((?:AIza)[0-9A-Za-z_-]{30,}|AQ\.[0-9A-Za-z._-]{20,}|GOCSPX-[0-9A-Za-z_-]{15,}|ya29\.[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z]{20,})"
 )
 
 _LOCATION_PLACEHOLDER_CLAIM_RE = re.compile(

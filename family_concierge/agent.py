@@ -243,6 +243,10 @@ app = family_concierge_app
 def create_persistent_runner(db_url: Optional[str] = None) -> tuple[Runner, DatabaseSessionService]:
     """Creates a production ADK `Runner` backed by persistent SQLite `DatabaseSessionService` and async memory."""
     resolved_db_url = db_url or os.environ.get("FAMILY_ADK_SESSION_DB", DEFAULT_SESSION_DB_URL)
+    if resolved_db_url.startswith("sqlite+aiosqlite:///"):
+        sqlite_file = resolved_db_url.replace("sqlite+aiosqlite:///", "", 1)
+        if sqlite_file and sqlite_file != ":memory:":
+            Path(sqlite_file).parent.mkdir(parents=True, exist_ok=True)
     session_svc = DatabaseSessionService(db_url=resolved_db_url)
     runner = Runner(
         app=family_concierge_app,

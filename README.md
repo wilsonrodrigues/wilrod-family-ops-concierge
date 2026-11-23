@@ -84,11 +84,29 @@ pip install -r requirements.txt
 cp .env.example family_concierge/.env
 # Edit family_concierge/.env and set GOOGLE_API_KEY=<your-key> (or USE_SECRET_MANAGER=1 with GOOGLE_CLOUD_PROJECT)
 
-# 3. Launch the full Family Ops Concierge PWA + FastAPI + ADK server
-uvicorn app.server:app --host 0.0.0.0 --port 8080 --reload
+# 3. Launch the full Family Ops Concierge PWA + FastAPI + ADK server (dual-stack IPv6 + IPv4)
+uvicorn app.server:app --host :: --port 8080 --reload
 ```
 
 Open `http://localhost:8080` in your browser. Fresh databases automatically load the synthetic **Foobar Family** fixture (`family_concierge/seed_data.json`; set `FAMILY_OPS_SKIP_SEED=1` to start empty).
+
+---
+
+## Connecting Your Personal / Shared Family Google Calendar (Read & Write Sync)
+
+You can link a real shared **Family Google Calendar** (including personal `@gmail.com` and Google Family Group calendars) directly from **Family Setup (`⚙️` -> Shared Family Google Calendar)**:
+
+1. **Enable Google Calendar API & Create an OAuth 2.0 Web Client**:
+   - In your personal Google Cloud Console (`https://console.cloud.google.com`), enable the **Google Calendar API**.
+   - Open **Google Auth Platform -> Audience**, keep Publishing Status in **Testing**, and add your personal `@gmail.com` address under **Test users**.
+   - Open **Clients -> Create Client -> Web application**, and add the exact **Authorized redirect URI** displayed inside the app's Setup card:
+     - Local dev: `http://localhost:8080/api/gcal/oauth/callback`
+     - Cloud Run: `https://<your-cloud-run-service-url>/api/gcal/oauth/callback`
+2. **Load Credentials & Sign In Once**:
+   - In **Family Setup (`⚙️`)**, either load the downloaded `client_secret_*.json` file (or paste Client ID + Client Secret, or set `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in `.env` / Secret Manager).
+   - Paste your **Shared Family Calendar link** (`https://calendar.google.com/calendar/embed?src=...`, `?cid=...` share link, or raw `family...@group.calendar.google.com`) **or** click **🔗 Sign in & Connect Personal Google Account** first and pick your Family calendar from the live dropdown.
+3. **Live Two-Way Behavior**:
+   - All AI Concierge tool calls (`list_family_calendar_events`, `schedule_family_calendar_event`, `delete_family_calendar_event`) and the Calendar UI read and write live Google Calendar events, creating recurring activities as native RFC-5545 `RRULE` series (`COUNT=30`) while preserving `[Participant]` prefixes and `30`-minute arrival-buffer warnings.
 
 ---
 

@@ -35,6 +35,10 @@ _SENSITIVE_FIELD_NAMES = {
     "authorization",
     "access_token",
     "refresh_token",
+    "oauth_client_secret",
+    "client_secret",
+    "oauth_tokens_json",
+    "code_verifier",
     "secret",
     "password",
     "data_base64",
@@ -42,7 +46,7 @@ _SENSITIVE_FIELD_NAMES = {
 
 # Ordered deterministic PII & credential patterns
 _CREDENTIAL_RE = re.compile(
-    r"((?:AIza)[0-9A-Za-z_-]{30,}|ya29\.[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z]{20,}|Bearer\s+[0-9A-Za-z._-]{20,})"
+    r"((?:AIza)[0-9A-Za-z_-]{30,}|AQ\.[0-9A-Za-z._-]{20,}|GOCSPX-[0-9A-Za-z_-]{15,}|ya29\.[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z]{20,}|Bearer\s+[0-9A-Za-z._-]{20,})"
 )
 _EMAIL_RE = re.compile(
     r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"

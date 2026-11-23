@@ -7,13 +7,15 @@ import base64
 from datetime import datetime
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Optional
+from urllib.parse import quote
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from google.adk.errors.session_not_found_error import SessionNotFoundError
 from google.adk.runners import Runner
@@ -25,7 +27,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / "family_concierge" / ".env")
 load_dotenv(BASE_DIR / ".env")
 
-from family_concierge import store  # noqa: E402
+from family_concierge import gcal_sync, store  # noqa: E402
 from family_concierge.agent import create_persistent_runner  # noqa: E402
 from family_concierge.model_router import (  # noqa: E402
     FAST_MODEL_ID,
@@ -43,6 +45,7 @@ from family_concierge.observability import (  # noqa: E402
 from family_concierge.secrets import resolve_gemini_api_key  # noqa: E402
 from family_concierge.tools import (  # noqa: E402
     DEFAULT_RECURRING_OCCURRENCES,
+    delete_family_calendar_event,
     find_calendar_overlaps,
     normalize_participants_and_title,
     schedule_family_calendar_event,
@@ -173,6 +176,31 @@ class CreateChatSessionPayload(BaseModel):
     created_by: str = Field(default="Family")
 
 
+class GoogleCalendarConfigPayload(BaseModel):
+    enabled: Optional[bool] = Field(default=None)
+    calendar_link_or_id: Optional[str] = Field(default=None)
+    oauth_client_id: Optional[str] = Field(default=None)
+    oauth_client_secret: Optional[str] = Field(default=None)
+    oauth_client_json: Optional[str] = Field(default=None)
+
+
+def _build_oauth_redirect_uri(request: Request) -> str:
+    """Computes the exact OAuth 2.0 callback URL (honoring Cloud Run X-Forwarded-Proto/Host)."""
+    explicit = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "").strip()
+    if explicit:
+        return explicit
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "http"
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or request.url.netloc
+        or "localhost:8080"
+    )
+    if host.endswith((".proxy.googlers.com", ".run.app")):
+        proto = "https"
+    return f"{proto}://{host}/api/gcal/oauth/callback"
+
+
 @app.on_event("startup")
 def _on_startup() -> None:
     store.init_db()
@@ -201,15 +229,18 @@ def auth_verify(payload: PasscodeVerifyRequest) -> dict[str, Any]:
 
 
 @app.get("/api/state", dependencies=[Depends(require_household_auth)])
-def get_full_state(include_completed: bool = True) -> dict[str, Any]:
+def get_full_state(request: Request, include_completed: bool = True) -> dict[str, Any]:
     bundle = store.get_household_bundle()
     return {
         "household": bundle["household"],
         "members": bundle["members"],
-        "events": store.query_events(),
+        "events": gcal_sync.query_active_calendar_events(),
         "items": store.query_action_items(include_completed=include_completed),
         "memories": store.query_household_memories(limit=20),
         "chat_sessions": store.list_chat_sessions(limit=40),
+        "gcal": gcal_sync.get_public_gcal_status(
+            redirect_uri_hint=_build_oauth_redirect_uri(request)
+        ),
     }
 
 
@@ -288,8 +319,135 @@ def update_household_setup(payload: HouseholdSetupPayload) -> dict[str, Any]:
     }
 
 
+@app.get("/api/gcal/status", dependencies=[Depends(require_household_auth)])
+def get_gcal_status_endpoint(request: Request) -> dict[str, Any]:
+    return gcal_sync.get_public_gcal_status(
+        redirect_uri_hint=_build_oauth_redirect_uri(request)
+    )
+
+
+@app.put("/api/gcal/config", dependencies=[Depends(require_household_auth)])
+def update_gcal_config_endpoint(
+    payload: GoogleCalendarConfigPayload,
+    request: Request,
+) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+
+    if payload.oauth_client_json and payload.oauth_client_json.strip():
+        try:
+            cid, csec = gcal_sync.parse_oauth_client_json_blob(payload.oauth_client_json.strip())
+            updates["oauth_client_id"] = cid
+            updates["oauth_client_secret"] = csec
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid OAuth client_secret JSON file: {exc}",
+            ) from exc
+    else:
+        if payload.oauth_client_id is not None and payload.oauth_client_id.strip():
+            updates["oauth_client_id"] = payload.oauth_client_id.strip()
+        if payload.oauth_client_secret is not None and payload.oauth_client_secret.strip():
+            updates["oauth_client_secret"] = payload.oauth_client_secret.strip()
+
+    if payload.calendar_link_or_id is not None:
+        raw_link = payload.calendar_link_or_id.strip()
+        parsed_cal_id = gcal_sync.parse_google_calendar_link(raw_link)
+        updates["calendar_link_input"] = raw_link
+        updates["calendar_id"] = parsed_cal_id
+        if parsed_cal_id and gcal_sync.get_authorized_gcal_credentials() is not None:
+            try:
+                updates["calendar_summary"] = gcal_sync.verify_and_resolve_calendar_summary(parsed_cal_id)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Connected Google account could not access calendar '{parsed_cal_id}': {exc}. "
+                        "Verify the link/ID or make sure this calendar is shared with your connected account."
+                    ),
+                ) from exc
+        elif not parsed_cal_id:
+            updates["calendar_summary"] = ""
+
+    if payload.enabled is not None:
+        updates["enabled"] = 1 if payload.enabled else 0
+
+    store.save_gcal_integration_row(**updates)
+    return {
+        "status": "success",
+        "gcal": gcal_sync.get_public_gcal_status(
+            redirect_uri_hint=_build_oauth_redirect_uri(request)
+        ),
+        "events": gcal_sync.query_active_calendar_events(),
+    }
+
+
+@app.get("/api/gcal/calendars", dependencies=[Depends(require_household_auth)])
+def list_gcal_calendars_endpoint() -> dict[str, Any]:
+    try:
+        calendars = gcal_sync.list_writable_calendars()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Could not list Google Calendars: {exc}") from exc
+    return {"calendars": calendars}
+
+
+@app.get("/api/gcal/oauth/start", dependencies=[Depends(require_household_auth)])
+def start_gcal_oauth_endpoint(request: Request) -> dict[str, Any]:
+    redirect_uri = _build_oauth_redirect_uri(request)
+    try:
+        auth_url = gcal_sync.create_oauth_authorization_url(redirect_uri)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"auth_url": auth_url, "redirect_uri": redirect_uri}
+
+
+@app.get("/api/gcal/oauth/callback")
+def complete_gcal_oauth_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+) -> RedirectResponse:
+    """Handles browser redirect back from Google's OAuth 2.0 consent screen."""
+    if error:
+        return RedirectResponse(url=f"/?gcal_error={quote(error)}")
+    if not code or not state:
+        return RedirectResponse(url="/?gcal_error=Missing+OAuth+code+or+state")
+
+    try:
+        gcal_sync.exchange_oauth_callback_code(
+            state=state,
+            code=code,
+            fallback_redirect_uri=_build_oauth_redirect_uri(request),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(url=f"/?gcal_error={quote(str(exc))}")
+
+    return RedirectResponse(url="/?gcal_connected=1")
+
+
+@app.post("/api/gcal/disconnect", dependencies=[Depends(require_household_auth)])
+def disconnect_gcal_endpoint(request: Request) -> dict[str, Any]:
+    store.save_gcal_integration_row(
+        enabled=0,
+        connected_email="",
+        calendar_summary="",
+        oauth_tokens_json="",
+    )
+    return {
+        "status": "success",
+        "gcal": gcal_sync.get_public_gcal_status(
+            redirect_uri_hint=_build_oauth_redirect_uri(request)
+        ),
+        "events": gcal_sync.query_active_calendar_events(),
+    }
+
+
 @app.post("/api/events", dependencies=[Depends(require_household_auth)])
 def create_event_endpoint(payload: CreateEventPayload) -> dict[str, Any]:
+    author_ctx = SimpleNamespace(
+        state={"active_member_name": payload.created_by},
+        tool_confirmation=None,
+    )
     result = schedule_family_calendar_event(
         title=payload.title,
         start_iso=payload.start_iso,
@@ -301,32 +459,25 @@ def create_event_endpoint(payload: CreateEventPayload) -> dict[str, Any]:
         occurrences=payload.occurrences,
         notes=payload.notes,
         allow_overlap=payload.allow_overlap,
-        tool_context=None,
+        tool_context=author_ctx,  # type: ignore[arg-type]
     )
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result)
 
-    with store._connect() as conn:
-        if result.get("series_id"):
-            conn.execute(
-                "UPDATE calendar_events SET created_by = ? WHERE series_id = ?",
-                (payload.created_by, result["series_id"]),
-            )
-        else:
-            conn.execute(
-                "UPDATE calendar_events SET created_by = ? WHERE event_id = ?",
-                (payload.created_by, result["event"]["event_id"]),
-            )
     result["event"]["created_by"] = payload.created_by
     return result
 
 
 @app.delete("/api/events/{event_id}", dependencies=[Depends(require_household_auth)])
 def remove_event_endpoint(event_id: str, delete_series: bool = False) -> dict[str, Any]:
-    deleted = store.delete_event_by_id(event_id, delete_series=delete_series)
-    if deleted is None:
-        raise HTTPException(status_code=404, detail="Event not found.")
-    return {"status": "success", "deleted_event": deleted}
+    res = delete_family_calendar_event(
+        event_id=event_id,
+        delete_entire_series=delete_series,
+        tool_context=None,
+    )
+    if res.get("status") == "error":
+        raise HTTPException(status_code=404, detail=res.get("message") or "Event not found.")
+    return res
 
 
 @app.post("/api/items", dependencies=[Depends(require_household_auth)])
@@ -404,7 +555,10 @@ def _describe_pending_confirmation(fc: types.FunctionCall) -> dict[str, Any]:
         delete_series = bool(
             tool_args.get("delete_entire_series") or tool_args.get("delete_series", False)
         )
-        matched = next((ev for ev in store.query_events() if ev["event_id"] == event_id), None)
+        matched = next(
+            (ev for ev in gcal_sync.query_active_calendar_events() if ev["event_id"] == event_id),
+            None,
+        )
         if matched:
             scope = "entire recurring series" if delete_series and matched.get("series_id") else "single occurrence"
             summary = f"Delete '{matched['title']}' on {matched['start_iso'][:16].replace('T', ' ')} ({scope})"
@@ -545,7 +699,7 @@ async def _execute_runner_turn(
         "pending_confirmations": pending_confirmations,
         "household": bundle["household"],
         "members": bundle["members"],
-        "events": store.query_events(),
+        "events": gcal_sync.query_active_calendar_events(),
         "items": store.query_action_items(include_completed=True),
         "memories": store.query_household_memories(limit=20),
         "chat_sessions": store.list_chat_sessions(limit=40),
